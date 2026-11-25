@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<opml version="1.0">
+  <head><title>Pocket Casts Feeds</title></head>
+  <body>
+    <outline text="feeds">
+      <outline type="rss" text="Up First" xmlUrl="https://feeds.npr.org/510318/podcast.xml" />
+      <outline text="Tech">
+        <outline TYPE="RSS" TEXT="The Vergecast" XMLURL="http://feeds.megaphone.fm/vergecast"/>
+        <outline type="rss" title="Ars Technica" url="https://feeds.arstechnica.com/arstechnica/podcast" />
+      </outline>
+      <outline type="rss" text="Dup of Up First" xmlUrl="http://feeds.npr.org/510318/podcast.xml/" />
+      <outline type="link" text="A website" url="https://example.com/" />
+      <outline type="rss" text="Feed scheme" xmlUrl="feed://example.org/podcast.rss" />
+      <outline type="rss" text="Bad" xmlUrl="" />
+      <outline type="rss" text="Rock &amp; Roll" xmlUrl="https://rock.example.com/feed?a=1&amp;b=2" />
+    </outline>
+  </body>
+</opml>

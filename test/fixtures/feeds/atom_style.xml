@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <title type="text">Atom Cast</title>
+  <subtitle>An Atom-format podcast</subtitle>
+  <link rel="alternate" href="https://atom.example.org/"/>
+  <link rel="self" href="https://atom.example.org/feed.atom"/>
+  <logo>https://atom.example.org/logo.png</logo>
+  <author><name>Jane Doe</name><email>jane@example.org</email></author>
+  <updated>2024-11-10T12:00:00+01:00</updated>
+  <entry>
+    <id>tag:atom.example.org,2024:ep2</id>
+    <title>Second</title>
+    <published>2024-11-10T12:00:00+01:00</published>
+    <updated>2024-11-11T12:00:00+01:00</updated>
+    <link rel="alternate" href="https://atom.example.org/ep2"/>
+    <link rel="enclosure" type="audio/mpeg" length="1000" href="https://atom.example.org/ep2.mp3"/>
+    <summary>Summary two</summary>
+    <content type="html">&lt;p&gt;Content two is longer than the summary&lt;/p&gt;</content>
+    <itunes:duration>PT1H2M3S</itunes:duration>
+  </entry>
+  <entry>
+    <id>tag:atom.example.org,2024:ep1</id>
+    <title>First</title>
+    <updated>2024-11-03T08:00:00Z</updated>
+    <link rel="enclosure" type="audio/ogg" href="https://atom.example.org/ep1.ogg"/>
+  </entry>
+</feed>

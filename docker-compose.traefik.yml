@@ -1,0 +1,73 @@
+# Patchcast Sync behind an existing Traefik v3 (docker provider, entrypoints `web` and `websecure`).
+#   cp .env.example .env   # set PATCHCAST_HOST, TRAEFIK_NETWORK, TRAEFIK_CERTRESOLVER
+#   docker compose -f docker-compose.traefik.yml up -d
+#
+# Sub-path instead of its own host name: set BASE_PATH=/podcasts and
+#   PATCHCAST_RULE=Host(`example.com`) && PathPrefix(`/podcasts`)
+# Do NOT add a StripPrefix middleware: the server expects to see the prefix.
+name: patchcast
+services:
+  patchcast:
+    image: ${PATCHCAST_IMAGE:-ghcr.io/sp3lllz/patchcast-server:latest}
+    build: .
+    restart: unless-stopped
+    # No published ports: the only way in is Traefik.
+    environment:
+      PUBLIC_URL: https://${PATCHCAST_HOST:?set PATCHCAST_HOST in .env}${PUBLIC_PORT_SUFFIX:-}
+      BASE_PATH: ${BASE_PATH:-}
+      # Believe X-Forwarded-For/Proto/Host only from private (Docker network) addresses, i.e. Traefik.
+      TRUST_PROXY: ${TRUST_PROXY:-uniquelocal}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      FEED_REFRESH_MINUTES: ${FEED_REFRESH_MINUTES:-60}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TZ: ${TZ:-Europe/London}
+      ADMIN_USER: ${ADMIN_USER:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SSRF_ALLOW_HOSTS: ${SSRF_ALLOW_HOSTS:-}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_CLIENT_SECRET_FILE: ${OIDC_CLIENT_SECRET_FILE:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-}
+      OIDC_PROVIDER_NAME: ${OIDC_PROVIDER_NAME:-}
+      OIDC_AUTO_CREATE: ${OIDC_AUTO_CREATE:-true}
+      OIDC_ALLOWED_GROUPS: ${OIDC_ALLOWED_GROUPS:-}
+      OIDC_ADMIN_GROUPS: ${OIDC_ADMIN_GROUPS:-}
+      OIDC_PASSWORD_LOGIN: ${OIDC_PASSWORD_LOGIN:-true}
+    volumes:
+      - data:/data
+    networks: [traefik]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 15s
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-traefik}
+      # HTTPS
+      traefik.http.routers.patchcast.rule: ${PATCHCAST_RULE:-Host(`${PATCHCAST_HOST}`)}
+      traefik.http.routers.patchcast.entrypoints: websecure
+      traefik.http.routers.patchcast.tls: "true"
+      traefik.http.routers.patchcast.tls.certresolver: ${TRAEFIK_CERTRESOLVER-letsencrypt}
+      traefik.http.routers.patchcast.service: patchcast
+      # HTTP → HTTPS
+      traefik.http.routers.patchcast-http.rule: ${PATCHCAST_RULE:-Host(`${PATCHCAST_HOST}`)}
+      traefik.http.routers.patchcast-http.entrypoints: web
+      traefik.http.routers.patchcast-http.middlewares: patchcast-https
+      traefik.http.routers.patchcast-http.service: patchcast
+      traefik.http.middlewares.patchcast-https.redirectscheme.scheme: https
+      traefik.http.middlewares.patchcast-https.redirectscheme.permanent: "true"
+      traefik.http.middlewares.patchcast-https.redirectscheme.port: ${TRAEFIK_HTTPS_PORT:-443}
+      # Service. SSE (/api/v1/events) is flushed immediately by Traefik; don't put a compress or buffering middleware on it.
+      traefik.http.services.patchcast.loadbalancer.server.port: "8080"
+      traefik.http.services.patchcast.loadbalancer.responseforwarding.flushinterval: 100ms
+      traefik.http.services.patchcast.loadbalancer.healthcheck.path: /healthz
+      traefik.http.services.patchcast.loadbalancer.healthcheck.interval: 30s
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik}
+volumes:
+  data:

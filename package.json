@@ -1,0 +1,30 @@
+{
+  "name": "patchcast-server",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.7"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --disable-warning=ExperimentalWarning 'test/*.test.ts'",
+    "start": "node --disable-warning=ExperimentalWarning dist/server.mjs"
+  },
+  "dependencies": {
+    "fastify": "5.12.8",
+    "htmlparser2": "12.0.0",
+    "ipaddr.js": "2.5.0",
+    "jose": "6.2.18",
+    "sanitize-html": "2.18.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.7",
+    "@types/sanitize-html": "2.16.2",
+    "esbuild": "0.28.2",
+    "preact": "11.2.0",
+    "typescript": "7.0.2"
+  }
+}

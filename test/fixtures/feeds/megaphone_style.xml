@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:googleplay="http://www.google.com/schemas/play-podcasts/1.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <atom:link href="https://feeds.megaphone.fm/vergecast" rel="self" type="application/rss+xml"/>
+    <title>The Vergecast</title>
+    <link>https://www.theverge.com/the-vergecast</link>
+    <language>en</language>
+    <description>Tech news and debates</description>
+    <image><url>https://megaphone.imgix.net/vergecast.jpg</url><title>The Vergecast</title><link>https://www.theverge.com</link></image>
+    <itunes:author>The Verge</itunes:author>
+    <item>
+      <title>The AI gadget episode</title>
+      <description>Desc &lt;b&gt;escaped&lt;/b&gt; html</description>
+      <pubDate>Tue, 12 Nov 2024 11:00:00 -0000</pubDate>
+      <itunes:title>The AI gadget episode</itunes:title>
+      <itunes:episodeType>full</itunes:episodeType>
+      <itunes:author>The Verge</itunes:author>
+      <itunes:image href="https://megaphone.imgix.net/ep.jpg"/>
+      <itunes:duration>5025</itunes:duration>
+      <guid isPermaLink="false"><![CDATA[a0dd3c12-a0b1-11ef-9f6a-2b7e0b0d1bc5]]></guid>
+      <enclosure url="https://www.podtrac.com/pts/redirect.mp3/traffic.megaphone.fm/VMP123.mp3?updated=1731400000" length="0" type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>No guid episode</title>
+      <pubDate>Sun, 10 Nov 2024 11:00:00 PST</pubDate>
+      <itunes:duration>3,600</itunes:duration>
+      <enclosure url="https://traffic.megaphone.fm/VMP122.mp3" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>

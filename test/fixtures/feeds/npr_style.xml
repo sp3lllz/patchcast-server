@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:npr="https://www.npr.org/rss/" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+  <channel>
+    <title>Up First from NPR</title>
+    <link>https://www.npr.org/podcasts/510318/up-first</link>
+    <atom:link href="https://feeds.npr.org/510318/podcast.xml" rel="self" type="application/rss+xml"/>
+    <description><![CDATA[NPR's <b>Up First</b> is the news you need to start your day.]]></description>
+    <copyright>Copyright 2015-2024 NPR</copyright>
+    <itunes:author>NPR</itunes:author>
+    <itunes:image href="https://media.npr.org/assets/img/upfirst.jpg"/>
+    <image>
+      <url>https://media.npr.org/assets/img/upfirst_rss.jpg</url>
+      <title>Up First IMAGE TITLE SHOULD NOT WIN</title>
+      <link>https://www.npr.org/podcasts/510318/up-first</link>
+    </image>
+    <itunes:owner><itunes:name>NPR</itunes:name><itunes:email>podcasts@npr.org</itunes:email></itunes:owner>
+    <itunes:category text="News"><itunes:category text="Daily News"/></itunes:category>
+    <item>
+      <title>Election Results, Cabinet Picks, Climate Talks</title>
+      <description><![CDATA[Votes are still being counted. <a href="https://npr.org/x">More</a>]]></description>
+      <pubDate>Fri, 15 Nov 2024 05:00:00 -0500</pubDate>
+      <copyright>Copyright 2024 NPR</copyright>
+      <guid>1af5d3c2-6d1c-4c3e-a6a4-0f3e3b1b9c11</guid>
+      <itunes:title>Election Results, Cabinet Picks, Climate Talks</itunes:title>
+      <itunes:author>NPR</itunes:author>
+      <itunes:image href="https://media.npr.org/assets/img/ep1.jpg"/>
+      <itunes:duration>821</itunes:duration>
+      <itunes:explicit>no</itunes:explicit>
+      <itunes:episodeType>full</itunes:episodeType>
+      <content:encoded><![CDATA[<p>Votes are still being counted.</p><p>Plus <a href="https://npr.org/x">more</a> and a much longer show note body.</p>]]></content:encoded>
+      <enclosure url="https://chrt.fm/track/138C95/prfx.byspotify.com/e/play.podtrac.com/npr-510318/ep1.mp3?t=podcast" length="13179393" type="audio/mpeg"/>
+    </item>
+    <item>
+      <title>Thursday &amp; Friday Briefing</title>
+      <description>Short one.</description>
+      <pubDate>Thu, 14 Nov 2024 05:00:00 -0500</pubDate>
+      <guid isPermaLink="false">a2b3c4d5-0000-4c3e-a6a4-0f3e3b1b9c22</guid>
+      <itunes:duration>00:13:45</itunes:duration>
+      <enclosure url="https://play.podtrac.com/npr-510318/ep2.mp3" length="0" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="/rss.xsl"?>
+<rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:media="http://search.yahoo.com/mrss/" xmlns:ppg="http://bbc.co.uk/2009/01/ppgRss" xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+  <channel>
+    <title>Global News Podcast</title>
+    <link>http://www.bbc.co.uk/programmes/p02nq0gn</link>
+    <description>The day's top stories from BBC News</description>
+    <itunes:summary>The day's top stories from BBC News compiled twice daily in the week</itunes:summary>
+    <language>en</language>
+    <image><url>https://ichef.bbci.co.uk/images/ic/3000x3000/p0h7.jpg</url><title>Global News Podcast</title><link>http://www.bbc.co.uk/programmes/p02nq0gn</link></image>
+    <itunes:image href="https://ichef.bbci.co.uk/images/ic/3000x3000/p0h7-itunes.jpg" />
+    <managingEditor>podcast.support@bbc.co.uk</managingEditor>
+    <itunes:author>BBC World Service</itunes:author>
+    <ppg:seriesDetails frequency="daily" daysLive="30" />
+    <item>
+      <title>Ceasefire talks resume</title>
+      <description>The latest from the talks.</description>
+      <itunes:subtitle>The latest</itunes:subtitle>
+      <pubDate>Sat, 16 Nov 2024 01:31:00 GMT</pubDate>
+      <itunes:duration>1952</itunes:duration>
+      <enclosure url="https://open.live.bbc.co.uk/mediaselector/6/redir/version/2.0/mediaset/audio-nondrm-download-rss/proto/http/vpid/p0k1.mp3" length="31232000" type="audio/mpeg" />
+      <ppg:enclosureLegacy url="https://legacy.example/p0k1.mp3" length="1" type="audio/mpeg" />
+      <guid isPermaLink="false">urn:bbc:podcast:p0k1</guid>
+      <link>https://www.bbc.co.uk/programmes/p0k1</link>
+      <media:content url="https://open.live.bbc.co.uk/p0k1.mp3" type="audio/mpeg" medium="audio" expression="full" fileSize="31232000" duration="1952"/>
+    </item>
+    <item>
+      <title>Media-only item</title>
+      <description>Only has media:content</description>
+      <pubDate>Fri, 15 Nov 2024 13:05:00 GMT</pubDate>
+      <guid isPermaLink="false">urn:bbc:podcast:p0k0</guid>
+      <media:content url="https://open.live.bbc.co.uk/p0k0.mp3" type="audio/mpeg" medium="audio" duration="1800"/>
+      <media:thumbnail url="https://ichef.bbci.co.uk/p0k0.jpg"/>
+    </item>
+  </channel>
+</rss>

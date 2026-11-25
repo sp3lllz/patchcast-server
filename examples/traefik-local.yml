@@ -1,0 +1,22 @@
+# Overlay that adds a Traefik v3 with its built-in self-signed certificate, to try the setup on one machine:
+#   PATCHCAST_HOST=patchcast.localhost TRAEFIK_CERTRESOLVER= TRAEFIK_HTTPS_PORT=8443 PUBLIC_PORT_SUFFIX=:8443 \
+#     docker compose -p patchcast-traefik -f docker-compose.traefik.yml -f examples/traefik-local.yml up -d --build
+#   → https://patchcast.localhost:8443
+services:
+  traefik:
+    image: traefik:v3.6
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Long episodes and event streams must not be cut off.
+      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=0
+      - --log.level=INFO
+      - --accesslog=true
+    ports: ["${TRAEFIK_HTTP_PORT:-8880}:80", "${TRAEFIK_HTTPS_PORT:-8443}:443"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    networks: [traefik]
+networks:
+  traefik: !override
+    name: ${TRAEFIK_NETWORK:-traefik}

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:psc="http://podlove.org/simple-chapters" xmlns:podcast="https://podcastindex.org/namespace/1.0">
+  <channel>
+    <title>Chapter Show</title>
+    <itunes:image href="https://example.org/show.jpg"/>
+    <item>
+      <title>With PSC chapters</title>
+      <guid>psc-1</guid>
+      <itunes:image href="https://example.org/ep1.jpg"/>
+      <enclosure url="https://example.org/1.mp3" type="audio/mpeg" length="1"/>
+      <psc:chapters version="1.2">
+        <psc:chapter start="00:00:00.000" title="Intro" />
+        <psc:chapter start="00:05:30.500" title="Main &amp; Topic" href="https://example.org/topic" image="https://example.org/c2.jpg" />
+        <psc:chapter start="1:02:03" title="Outro" />
+      </psc:chapters>
+    </item>
+    <item>
+      <title>With JSON chapters link</title>
+      <guid>json-1</guid>
+      <enclosure url="https://example.org/2.mp3" type="audio/mpeg"/>
+      <podcast:chapters url="https://example.org/2.json" type="application/json+chapters"/>
+    </item>
+  </channel>
+</rss>
