@@ -1,26 +1,31 @@
 # Patchcast Sync API, version 1
 
 Base: `<server><BASE_PATH>/api/v1`. JSON, UTF-8, times in epoch **milliseconds**. Errors: `{"error": "code", "message": "text"}`.
-`GET /status` (no auth) → `{name:"Patchcast Sync", version, api:1, setupRequired, registrationOpen, passwordLogin, oidc: {enabled, providerName}}`; `GET /server-info` answers the same (404 before 0.7). Incompatible changes get a new `/api/vN`.
+`GET /status` (no auth) → `{name:"Patchcast Sync", version, api:1, setupRequired:false, registrationOpen:false, passwordLogin:false, oidc: {enabled:true, providerName}}`;
+`GET /server-info` answers the same (404 before 0.7). Since 0.8 the three flags are always `false` and `oidc.enabled` is always `true`; they stay in the answer for
+installed apps (`passwordLogin: false` = hide the password form). Incompatible changes get a new `/api/vN`.
 
 ## Authentication
+Signing in only works through the server's OpenID Connect provider (0.8: there are no passwords). The provider decides who may sign in; the server
+creates an account at a person's first sign-in (unless `OIDC_AUTO_CREATE=false`). Identity is the provider's issuer + `sub`.
+
 | | |
 |---|---|
-| Apps | `POST /auth/device {username,password,deviceName}` → `{token, deviceId, user}`. Then `Authorization: Bearer pct_…`. Keep the token, never the password. 401 = revoked: sign in again |
-| Browsers | `POST /auth/login {username,password}` → session cookie + `{csrf,…}`. Send `X-CSRF-Token` on every non-GET |
+| Apps | Browser flow below → `POST /auth/oidc/exchange` → `{token, deviceId, user, version}`. Then `Authorization: Bearer pct_…`. 401 = revoked: sign in again |
+| Browsers | Navigate to `<server>/auth/oidc/login?returnTo=/path`; returns with an `HttpOnly` session cookie. `GET /me` → `{user, deviceId, csrf, …}`; send `X-CSRF-Token` on every non-GET |
 | Both | `GET /me`, `POST /auth/logout` (revokes the calling device), `GET /devices`, `PATCH /devices/:id {name}`, `DELETE /devices/:id` (an app may only delete itself) |
-| First run | `POST /auth/setup {token,username,password}` |
-| Admin, browser only | `GET/POST /users`, `DELETE /users/:id`; anyone: `POST /me/password {password,newPassword}` |
+| Browser only | `GET /me/account` → `{username, displayName, isAdmin, sessionVia, oidc:{providerName, issuer}, identity:{username, email, linkedAt, lastLoginAt}}`. `POST /auth/logout {provider: true}` → `{endSessionUrl}` |
+| Admin, browser only | `GET /users` → `{autoCreate, providerName, users:[{id, username, displayName, isAdmin, oidc, email, lastLoginAt, podcasts, createdAt}]}` (`oidc: false` = account from 0.7 without an identity, can't sign in), `DELETE /users/:id` |
 
-### Single sign-on (0.7; when `oidc.enabled`)
-- **App**: open in a browser `<server>/auth/oidc/app?device_name=…&code_challenge=<S256>&code_challenge_method=S256&state=<8-128 chars>&redirect_uri=patchcast://sync-callback`.
-  It ends at `patchcast://sync-callback?code=…&state=…` or `?error=access_denied|not_allowed|no_account|setup_first|expired|provider_unreachable|failed&state=…`.
-  Then `POST /auth/oidc/exchange {code, code_verifier}` → the same answer as `/auth/device`. The code lives 2 minutes and works once; a wrong verifier destroys it.
-  Ignore links whose `state` isn't yours.
-- **Browser**: navigate to `<server>/auth/oidc/login?returnTo=/path`; returns with the session cookie.
-- **Account** (browser session): `GET /me/account`, `POST /me/oidc/link` → `{url}` to navigate to, `DELETE /me/oidc/link` (409 if it is the only way to sign in).
-  `POST /auth/logout {provider: true}` → `{endSessionUrl}`.
-- With password sign-in switched off, `/auth/login` and `/auth/device` answer 403 `password_login_disabled`.
+Removed in 0.8 (404): `POST /auth/login`, `POST /auth/device`, `POST /auth/setup`, `POST /auth/register`, `POST /me/password`, `POST /users` (creating a user with a password), `POST`/`DELETE /me/oidc/link`.
+
+### App sign-in
+Open in a browser (Custom Tab / `ASWebAuthenticationSession`)
+`<server>/auth/oidc/app?device_name=…&code_challenge=<S256>&code_challenge_method=S256&state=<8-128 chars>&redirect_uri=patchcast://sync-callback`.
+It ends at `patchcast://sync-callback?code=…&state=…` or `?error=access_denied|not_allowed|no_account|setup_first|expired|provider_unreachable|failed&state=…`
+(`setup_first`: the server has no administrator yet and this person may not be the first, see the README's "First administrator").
+Then `POST /auth/oidc/exchange {code, code_verifier}` → `{token, deviceId, user, version}`. The code lives 2 minutes and works once; a wrong verifier destroys it.
+Ignore links whose `state` isn't yours.
 
 429 responses carry `Retry-After`. Non-GET requests from another origin are refused.
 

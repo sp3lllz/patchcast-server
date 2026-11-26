@@ -110,7 +110,7 @@ const MIGRATIONS: string[] = [
     at INTEGER NOT NULL, PRIMARY KEY (user_id, push_id)
   );
   `,
-  // 0.7.0: OIDC. Accounts without a local password have pw_hash ''. pw_recovery_until: set by the set-password command.
+  // 0.7.0: OIDC. Accounts without a local password have pw_hash ''. Since 0.8.0 pw_hash and pw_recovery_until are kept but never read.
   `
   ALTER TABLE users ADD COLUMN display_name TEXT;
   ALTER TABLE users ADD COLUMN pw_recovery_until INTEGER NOT NULL DEFAULT 0;

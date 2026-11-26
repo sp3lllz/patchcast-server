@@ -6,6 +6,17 @@
 #   containers reach it through the network alias below (start the server with examples/oidc-local.yml).
 #   export POCKET_ENCRYPTION_KEY=$(openssl rand -base64 32) POCKET_API_KEY=$(openssl rand -hex 24)
 #   docker compose -f examples/pocket-id-local.yml up -d
+#
+# Without clicking through the UI (Pocket ID v2 API; X-API-Key is the static key above):
+#   P=http://auth.localhost:1411; H=(-H "X-API-Key: $POCKET_API_KEY" -H "content-type: application/json")
+#   curl "${H[@]}" -X POST $P/api/oidc/clients -d '{"name":"Patchcast","callbackURLs":["http://localhost:8090/auth/oidc/callback"],
+#        "logoutCallbackURLs":["http://localhost:8090/"],"isPublic":false,"pkceEnabled":true}'          # → "id" = OIDC_CLIENT_ID
+#   curl "${H[@]}" -X POST $P/api/oidc/clients/<client id>/secrets -d '{}'                               # → "secret" = OIDC_CLIENT_SECRET
+#   curl "${H[@]}" -X POST $P/api/users -d '{"username":"owner","email":"owner@example.com","firstName":"Owner","isAdmin":true}'   # → "id"
+# Then sign in without a passkey using a one-time login code (valid until expiresAt):
+#   curl "${H[@]}" -X POST $P/api/users/<user id>/one-time-access-token -d '{"expiresAt":"<RFC 3339 time a few minutes ahead>"}'  # → "token"
+#   open http://auth.localhost:1411/lc/<token>, then http://localhost:8090/ → "Sign in with Pocket ID".
+# The first sign-in on an empty Patchcast server becomes its administrator.
 name: patchcast-pocketid
 services:
   pocket-id:

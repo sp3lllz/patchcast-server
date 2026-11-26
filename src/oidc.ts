@@ -178,7 +178,6 @@ export class OidcClient {
 
 export type FlowKind =
   | { kind: "web"; returnTo: string }
-  | { kind: "link"; userId: number; sessionHash: string }
   | { kind: "app"; challenge: string; deviceName: string; appState: string | null };
 export type Flow = FlowKind & { nonce: string; verifier: string; binding: string; expires: number };
 

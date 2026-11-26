@@ -1,4 +1,6 @@
 # Patchcast Sync, simple setup: http://<this machine>:8080
+# Needs an OIDC provider (Pocket ID): set PUBLIC_URL, OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET in .env (see .env.example).
+# The first sign-in on an empty server becomes the administrator (README → "First administrator").
 # Plain http is fine on your own LAN; anything reachable from the internet belongs behind TLS (docker-compose.traefik.yml).
 name: patchcast
 services:
@@ -9,19 +11,17 @@ services:
     ports:
       - "${BIND:-0.0.0.0}:${HTTP_PORT:-8080}:8080"
     environment:
-      PUBLIC_URL: ${PUBLIC_URL:-}
+      # Required: sign-in is only through the OIDC provider (see README "Pocket ID setup").
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env}
       BASE_PATH: ${BASE_PATH:-}
       TRUST_PROXY: ${TRUST_PROXY:-false}
-      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
       SESSION_SECRET: ${SESSION_SECRET:-}
       FEED_REFRESH_MINUTES: ${FEED_REFRESH_MINUTES:-60}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TZ: ${TZ:-Europe/London}
-      ADMIN_USER: ${ADMIN_USER:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SSRF_ALLOW_HOSTS: ${SSRF_ALLOW_HOSTS:-}
-      OIDC_ISSUER: ${OIDC_ISSUER:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER in .env}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID in .env}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       OIDC_CLIENT_SECRET_FILE: ${OIDC_CLIENT_SECRET_FILE:-}
       OIDC_SCOPES: ${OIDC_SCOPES:-}
@@ -29,7 +29,6 @@ services:
       OIDC_AUTO_CREATE: ${OIDC_AUTO_CREATE:-true}
       OIDC_ALLOWED_GROUPS: ${OIDC_ALLOWED_GROUPS:-}
       OIDC_ADMIN_GROUPS: ${OIDC_ADMIN_GROUPS:-}
-      OIDC_PASSWORD_LOGIN: ${OIDC_PASSWORD_LOGIN:-true}
     volumes:
       - data:/data
     read_only: true

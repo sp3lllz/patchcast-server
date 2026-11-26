@@ -1,38 +1,32 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./config.ts";
+import { ConfigError, loadConfig, type Config } from "./config.ts";
 import { buildApp } from "./app.ts";
-import { passwordProblem, validateUsername } from "./auth.ts";
 
 process.umask(0o077); // database and secrets are private to this user
-const config = loadConfig();
-const here = dirname(fileURLToPath(import.meta.url));
-const { app, auth, db, feeds } = await buildApp({ config, webDir: process.env.WEB_DIR || join(here, "web") });
 
-// Recovery: docker compose exec -T patchcast node /app/server.mjs set-password <user>   (new password on stdin)
 if (process.argv[2] === "set-password") {
-  const { readFileSync } = await import("node:fs");
-  const password = readFileSync(0, "utf8").replace(/\r?\n$/, "");
-  const problem = passwordProblem(password), user = db.get("SELECT id FROM users WHERE username=?", process.argv[3] ?? "");
-  if (problem || !user) { console.error(problem ?? "No such user"); process.exit(1); }
-  await auth.setPassword(user.id, password);
-  // Recovery also works while OIDC_PASSWORD_LOGIN=false: that user may use the password for the next 24 hours.
-  db.run("UPDATE users SET pw_recovery_until=? WHERE id=?", Date.now() + 86_400_000, user.id);
-  console.log("Password changed; browser sessions of that user were signed out." + (config.oidc && !config.oidc.passwordLogin ? " Password sign-in is open to them for 24 hours." : ""));
-  process.exit(0);
+  console.error("Patchcast Sync: set-password was removed in 0.8.0. There are no passwords any more: everybody signs in with the OIDC provider (Pocket ID), which manages accounts and recovery.");
+  process.exit(2);
 }
 
-if (auth.userCount() === 0 && config.adminUser && config.adminPassword) {
-  const username = validateUsername(config.adminUser), problem = passwordProblem(config.adminPassword);
-  if (!username || problem) { app.log.error(problem ?? "ADMIN_USER is not a valid username"); process.exit(1); }
-  await auth.createUser(username, config.adminPassword, true, true);
-  app.log.info({ username }, "admin account created from ADMIN_USER / ADMIN_PASSWORD");
+let config: Config;
+try { config = loadConfig(); } catch (e: any) {
+  // Refuse to start, with a message an operator can act on (no stack trace for configuration mistakes).
+  console.error(`Patchcast Sync can't start: ${e instanceof ConfigError ? e.message : e?.stack ?? e}`);
+  process.exit(1);
 }
-const token = auth.ensureSetupToken();
+const here = dirname(fileURLToPath(import.meta.url));
+const { app, auth, feeds } = await buildApp({ config, webDir: process.env.WEB_DIR || join(here, "web") });
+
+if (config.ignored.length)
+  app.log.warn({ ignored: config.ignored }, "these settings were removed in 0.8.0 (no passwords) and are ignored: remove them from the environment, and the password from .env");
 await app.listen({ port: config.port, host: config.host });
-if (token) {
-  // The one secret that has to reach the log: valid only until the first account exists, and not written to disk.
-  console.log(`\n  Patchcast Sync: first-run setup\n  Open ${config.publicUrl ?? `http://localhost:${config.port}`}${config.basePath}/ and enter this setup token:\n\n      ${token}\n`);
+if (auth.userCount() === 0) {
+  const o = config.oidc;
+  app.log.warn(!o.autoCreate ? "no accounts yet, and OIDC_AUTO_CREATE=false: nobody can sign in until it is true for the first sign-in"
+    : o.adminGroups.length ? `no accounts yet: the first person to sign in with ${o.providerName} who is in OIDC_ADMIN_GROUPS becomes the administrator`
+    : `no accounts yet: the first person to sign in with ${o.providerName} becomes the administrator (set OIDC_ADMIN_GROUPS, or OIDC_AUTO_CREATE=false, afterwards)`);
 }
 
 const every = config.feedRefreshMinutes * 60_000;

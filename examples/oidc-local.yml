@@ -1,6 +1,7 @@
 # Overlay: Patchcast Sync on http://localhost:8090 signing in with examples/pocket-id-local.yml.
 #   OIDC_CLIENT_ID=… OIDC_CLIENT_SECRET=… HTTP_PORT=8090 PUBLIC_URL=http://localhost:8090 OIDC_ISSUER=http://auth.localhost:1411 \
 #     docker compose -p patchcast-oidc -f docker-compose.yml -f examples/oidc-local.yml up -d --build
+#   (the same variables are needed for `down`, because the compose file requires them)
 services:
   patchcast:
     networks: [default, patchcast-oidc]

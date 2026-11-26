@@ -4,7 +4,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { join, normalize, extname, sep } from "node:path";
 import type { Config } from "./config.ts";
 import { Db, type Row } from "./db.ts";
-import { Auth, AuthError, LoginLimiter, SESSION_MS, passwordProblem, safeEqual, validateUsername, type Principal } from "./auth.ts";
+import { Auth, AuthError, RateLimiter, SESSION_MS, safeEqual, type Principal } from "./auth.ts";
 import { Events } from "./events.ts";
 import { Feeds } from "./feeds.ts";
 import { SyncStore, SyncError, cleanSettings, stateOut, subOut, type EpisodeChange } from "./sync.ts";
@@ -19,19 +19,19 @@ import { parseOpml, writeOpml } from "./opml.ts";
 const COOKIE = "patchcast_session";
 type Req = FastifyRequest & { principal?: Principal };
 
-export interface AppOptions { config: Config; db?: Db; webDir?: string; now?: () => number; logger?: any }
+export interface AppOptions { config: Config; db?: Db; webDir?: string; now?: () => number; logger?: any; /** Where the default logger writes (tests). */ logStream?: NodeJS.WritableStream }
 
 export async function buildApp(o: AppOptions) {
   const { config } = o;
   const db = o.db ?? Db.open(config.dataDir);
-  const auth = new Auth(db, config.sessionSecret);
+  const auth = new Auth(db, config.sessionSecret, config.oidc.issuer);
   const events = new Events();
   const sync = new SyncStore(db, (userId, rev, deviceId) => events.send(userId, "change", { rev, deviceId }), o.now);
-  const limiter = new LoginLimiter();
+  const limiter = new RateLimiter();
   const audioSlots = new Map<number, number>();
   const base = config.basePath;
   const accounts = new Accounts(db, config);
-  const oidc = config.oidc ? new OidcClient(config.oidc, `${config.publicUrl}${base}/auth/oidc/callback`, config.ssrfAllowHosts) : null;
+  const oidc = new OidcClient(config.oidc, `${config.publicUrl}${base}/auth/oidc/callback`, config.ssrfAllowHosts);
 
   const app: FastifyInstance = Fastify({
     trustProxy: config.trustProxy as any,
@@ -39,6 +39,7 @@ export async function buildApp(o: AppOptions) {
     routerOptions: { maxParamLength: 8192 },
     logger: o.logger ?? {
       level: config.logLevel,
+      ...(o.logStream ? { stream: o.logStream } : {}),
       // Never log headers, bodies, query strings or client-supplied URLs beyond the path.
       serializers: {
         req: (r: FastifyRequest) => ({ method: r.method, path: r.url.split("?")[0].replace(/\/art\/.*/, "/art/…"), ip: r.ip, proto: r.protocol, host: r.host }),
@@ -116,16 +117,8 @@ export async function buildApp(o: AppOptions) {
     req.principal = p;
   };
   const adminOnly = async (req: Req) => { if (!req.principal!.isAdmin) throw new AuthError(403, "forbidden", "Administrators only"); };
-  // Account management needs an interactive browser session; a leaked device token can't create users or change passwords.
+  // Account management needs an interactive browser session; a leaked device token can't manage users.
   const cookieOnly = async (req: Req) => { if (req.principal!.via !== "cookie") throw new AuthError(403, "forbidden", "Use the web client for this"); };
-
-  const limited = async <T>(req: FastifyRequest, user: string, fn: () => Promise<T>, ok: (t: T) => boolean): Promise<T> => {
-    const wait = limiter.take(req.ip, user);
-    if (wait) throw Object.assign(new AuthError(429, "rate_limited", `Too many attempts. Try again in ${Math.ceil(wait / 60)} min.`), { wait });
-    const r = await fn();
-    if (ok(r)) limiter.success(req.ip, user);
-    return r;
-  };
 
   const me = (p: Principal) => ({ user: { id: p.userId, username: p.username, isAdmin: p.isAdmin }, deviceId: p.deviceId, deviceName: p.deviceName, csrf: p.csrf, version: config.version });
   const browserName = (ua = "") => {
@@ -176,71 +169,22 @@ export async function buildApp(o: AppOptions) {
   await app.register(async (r) => {
     r.get("/healthz", { logLevel: "silent" }, async () => { db.get("SELECT 1"); return { ok: true, version: config.version }; });
 
+    // passwordLogin, registrationOpen and setupRequired are always false since 0.8. They stay in the answer because
+    // installed apps read them: passwordLogin: false makes them hide their password form.
     const info = () => ({
-      name: "Patchcast Sync", version: config.version, api: 1, setupRequired: auth.userCount() === 0,
-      registrationOpen: config.allowRegistration && auth.userCount() > 0 && accounts.passwordLoginEnabled(),
-      passwordLogin: accounts.showPasswordForm(), oidc: { enabled: !!config.oidc, providerName: config.oidc?.providerName ?? null },
+      name: "Patchcast Sync", version: config.version, api: 1, setupRequired: false, registrationOpen: false, passwordLogin: false,
+      oidc: { enabled: true, providerName: config.oidc.providerName },
     });
     r.get("/api/v1/status", async () => info());
     r.get("/api/v1/server-info", async () => info());
 
-    r.post("/api/v1/auth/setup", async (req: Req, reply) => {
-      sameOrigin(req);
-      const b = (req.body ?? {}) as any;
-      if (auth.userCount() > 0) throw new AuthError(409, "setup_done", "Setup has already been completed");
-      const token = auth.ensureSetupToken()!;
-      const ok = await limited(req, "~setup", async () => typeof b.token === "string" && safeEqual(b.token.trim(), token), Boolean);
-      if (!ok) throw new AuthError(403, "bad_setup_token", "Wrong setup token (it is printed in the server log)");
-      const username = validateUsername(b.username);
-      if (!username) throw new AuthError(400, "bad_username", "Username: 2-40 letters, digits, . _ @ -");
-      const problem = passwordProblem(b.password);
-      if (problem) throw new AuthError(400, "bad_password", problem);
-      const id = await auth.createUser(username, b.password, true, true);
-      auth.setupToken = null;
-      return startSession(req, reply, id);
-    });
-
-    r.post("/api/v1/auth/register", async (req: Req, reply) => {
-      sameOrigin(req);
-      if (!config.allowRegistration || auth.userCount() === 0 || !accounts.passwordLoginEnabled()) throw new AuthError(403, "registration_closed", "Registration is closed");
-      const b = (req.body ?? {}) as any;
-      const username = validateUsername(b.username), problem = passwordProblem(b.password);
-      if (!username) throw new AuthError(400, "bad_username", "Username: 2-40 letters, digits, . _ @ -");
-      if (problem) throw new AuthError(400, "bad_password", problem);
-      const id = await limited(req, "~register", () => auth.createUser(username, b.password, false), () => false);
-      return startSession(req, reply, id);
-    });
-
-    const startSession = (req: Req, reply: FastifyReply, userId: number, via: "password" | "oidc" = "password", idToken: string | null = null) => {
-      const s = auth.createSession(userId, browserName(req.headers["user-agent"]), via, idToken);
+    const startSession = (req: Req, reply: FastifyReply, userId: number, idToken: string | null = null) => {
+      const s = auth.createSession(userId, browserName(req.headers["user-agent"]), idToken);
       setCookie(req, reply, s.id, SESSION_MS / 1000);
       reply.header("cache-control", "no-store");
       return me(auth.bySession(s.id)!);
     };
-    const login = async (req: Req) => {
-      const b = (req.body ?? {}) as any;
-      if (typeof b.username !== "string" || typeof b.password !== "string" || b.password.length > 256 || b.username.length > 100)
-        throw new AuthError(400, "bad_request", "Username and password are required");
-      if (!accounts.passwordLoginFor(b.username.trim())) throw new AuthError(403, "password_login_disabled", `Password sign-in is switched off on this server. Use ${config.oidc?.providerName}.`);
-      const user = await limited(req, b.username, () => auth.checkLogin(b.username.trim(), b.password), Boolean);
-      if (!user) { req.log.warn({ ip: req.ip }, "login failed"); throw new AuthError(401, "bad_credentials", "Wrong username or password"); }
-      return { user, body: b };
-    };
-    r.post("/api/v1/auth/login", async (req: Req, reply) => {
-      sameOrigin(req);
-      const { user } = await login(req);
-      return startSession(req, reply, user.id);
-    });
-    r.post("/api/v1/auth/device", async (req: Req, reply) => {
-      sameOrigin(req); // native apps send neither Origin nor Sec-Fetch-Site
-      const { user, body } = await login(req);
-      const d = auth.createDevice(user.id, deviceName(body.deviceName, "Phone"));
-      reply.header("cache-control", "no-store");
-      events.send(user.id, "devices", {});
-      return { token: d.token, deviceId: d.deviceId, user: { id: user.id, username: user.username, isAdmin: !!user.is_admin }, version: config.version };
-    });
-
-    const sso = oidcRoutes(r, { config, auth, accounts, client: oidc, limiter, secure, sameOrigin, deviceName, startSession, deviceCreated: (u) => events.send(u, "devices", {}), now: o.now });
+    oidcRoutes(r, { config, auth, accounts, client: oidc, limiter, secure, sameOrigin, deviceName, startSession, deviceCreated: (u) => events.send(u, "devices", {}), now: o.now });
 
     // ---------------------------------------------------------- everything below needs a signed-in user
     await r.register(async (a) => {
@@ -257,33 +201,11 @@ export async function buildApp(o: AppOptions) {
         if (p.via === "cookie") setCookie(req, reply, "", 0);
         // Optional "sign out of the provider too". The local session is gone either way.
         let endSessionUrl: string | null = null;
-        if (oidc && s?.via === "oidc" && (req.body as any)?.provider === true)
+        if (s?.via === "oidc" && (req.body as any)?.provider === true)
           endSessionUrl = await oidc.logoutUrl(s.id_token ? auth.unseal(s.id_token) : null, `${config.publicUrl}${base}/`).catch(() => null);
         return { ok: true, endSessionUrl };
       });
       a.get("/api/v1/me/account", { preHandler: cookieOnly }, async (req) => accounts.describe(P(req)));
-      a.post("/api/v1/me/oidc/link", { preHandler: cookieOnly }, async (req, reply) => {
-        if (!oidc) throw new AuthError(404, "oidc_disabled", "Single sign-on is off on this server");
-        return sso.beginLink(req, reply, P(req).userId, P(req).sessionHash!);
-      });
-      a.delete("/api/v1/me/oidc/link", { preHandler: cookieOnly }, async (req) => { accounts.unlink(P(req).userId); return { ok: true }; });
-      a.post("/api/v1/me/password", { preHandler: cookieOnly }, async (req) => {
-        const p = P(req), b = (req.body ?? {}) as any;
-        const problem = passwordProblem(b.newPassword);
-        if (problem) throw new AuthError(400, "bad_password", problem);
-        const own = auth.user(p.userId)!;
-        if (!own.pw_hash) {
-          // An account created by single sign-on has nothing to confirm with: insist on a recent sign-in instead.
-          if (!db.get("SELECT 1 FROM sessions WHERE id_hash=? AND created_at>?", p.sessionHash!, Date.now() - 15 * 60_000))
-            throw new AuthError(403, "sign_in_again", "Sign out, sign in again, and set the password within 15 minutes");
-        } else {
-          const ok = await limited(req, p.username, () => auth.checkLogin(p.username, String(b.password ?? "").slice(0, 256)), Boolean);
-          if (!ok) throw new AuthError(403, "bad_credentials", "Current password is wrong");
-        }
-        await auth.setPassword(p.userId, b.newPassword, p.sessionHash);
-        events.drop((c) => c.userId === p.userId && c.deviceId !== p.deviceId);
-        return { ok: true };
-      });
 
       // ---- devices
       a.get("/api/v1/devices", async (req) => ({
@@ -309,17 +231,15 @@ export async function buildApp(o: AppOptions) {
 
       // ---- users (admin)
       const admin = { preHandler: [adminOnly, cookieOnly] };
+      // Accounts are created by signing in; there is no "create user". `oidc: false` marks an account left over from
+      // 0.7 that has no identity at this provider and so can't sign in any more.
       a.get("/api/v1/users", admin, async () => ({
-        users: db.all(`SELECT id,username,display_name displayName,is_admin isAdmin,created_at createdAt,pw_hash<>'' password,EXISTS(SELECT 1 FROM identities i WHERE i.user_id=u.id AND i.issuer=?) oidc,(SELECT COUNT(*) FROM subscriptions s WHERE s.user_id=u.id AND deleted=0) podcasts FROM users u ORDER BY id`, config.oidc?.issuer ?? "")
-          .map((u) => ({ ...u, isAdmin: !!u.isAdmin, password: !!u.password, oidc: !!u.oidc })),
+        autoCreate: config.oidc.autoCreate, providerName: config.oidc.providerName,
+        users: db.all(`SELECT id,username,display_name displayName,is_admin isAdmin,created_at createdAt,EXISTS(SELECT 1 FROM identities i WHERE i.user_id=u.id AND i.issuer=?) oidc,
+          (SELECT email FROM identities i WHERE i.user_id=u.id AND i.issuer=?) email,(SELECT last_login_at FROM identities i WHERE i.user_id=u.id AND i.issuer=?) lastLoginAt,
+          (SELECT COUNT(*) FROM subscriptions s WHERE s.user_id=u.id AND deleted=0) podcasts FROM users u ORDER BY id`, config.oidc.issuer, config.oidc.issuer, config.oidc.issuer)
+          .map((u) => ({ ...u, isAdmin: !!u.isAdmin, oidc: !!u.oidc })),
       }));
-      a.post("/api/v1/users", admin, async (req) => {
-        const b = (req.body ?? {}) as any;
-        const username = validateUsername(b.username), problem = passwordProblem(b.password);
-        if (!username) throw new AuthError(400, "bad_username", "Username: 2-40 letters, digits, . _ @ -");
-        if (problem) throw new AuthError(400, "bad_password", problem);
-        return { id: await auth.createUser(username, b.password, b.isAdmin === true) };
-      });
       a.delete("/api/v1/users/:id", admin, async (req) => {
         const id = num((req.params as any).id);
         if (id === P(req).userId) throw new AuthError(400, "bad_request", "You can't delete your own account");

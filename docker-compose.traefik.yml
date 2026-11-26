@@ -1,5 +1,5 @@
 # Patchcast Sync behind an existing Traefik v3 (docker provider, entrypoints `web` and `websecure`).
-#   cp .env.example .env   # set PATCHCAST_HOST, TRAEFIK_NETWORK, TRAEFIK_CERTRESOLVER
+#   cp .env.example .env   # set PATCHCAST_HOST, TRAEFIK_NETWORK, TRAEFIK_CERTRESOLVER and OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET
 #   docker compose -f docker-compose.traefik.yml up -d
 #
 # Sub-path instead of its own host name: set BASE_PATH=/podcasts and
@@ -17,16 +17,13 @@ services:
       BASE_PATH: ${BASE_PATH:-}
       # Believe X-Forwarded-For/Proto/Host only from private (Docker network) addresses, i.e. Traefik.
       TRUST_PROXY: ${TRUST_PROXY:-uniquelocal}
-      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
       SESSION_SECRET: ${SESSION_SECRET:-}
       FEED_REFRESH_MINUTES: ${FEED_REFRESH_MINUTES:-60}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TZ: ${TZ:-Europe/London}
-      ADMIN_USER: ${ADMIN_USER:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       SSRF_ALLOW_HOSTS: ${SSRF_ALLOW_HOSTS:-}
-      OIDC_ISSUER: ${OIDC_ISSUER:-}
-      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER in .env}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID in .env}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       OIDC_CLIENT_SECRET_FILE: ${OIDC_CLIENT_SECRET_FILE:-}
       OIDC_SCOPES: ${OIDC_SCOPES:-}
@@ -34,7 +31,6 @@ services:
       OIDC_AUTO_CREATE: ${OIDC_AUTO_CREATE:-true}
       OIDC_ALLOWED_GROUPS: ${OIDC_ALLOWED_GROUPS:-}
       OIDC_ADMIN_GROUPS: ${OIDC_ADMIN_GROUPS:-}
-      OIDC_PASSWORD_LOGIN: ${OIDC_PASSWORD_LOGIN:-true}
     volumes:
       - data:/data
     networks: [traefik]
