@@ -88,7 +88,7 @@ else the part of the email before `@`, with `-2`, `-3`… if taken.
 Compose snippet for a homelab with Traefik on network `proxy` and certificate resolver `letsencrypt` (secrets in `patchcast.env`, not in the repository):
 ```yaml
   patchcast:
-    image: ghcr.io/sp3lllz/patchcast-server:0.8.0
+    image: ghcr.io/sp3lllz/patchcast-server:0.9.0
     container_name: patchcast
     restart: unless-stopped
     env_file:

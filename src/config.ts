@@ -34,7 +34,7 @@ export interface Config {
   version: string;
 }
 
-export const VERSION = "0.8.0";
+export const VERSION = "0.9.0";
 /** Password-era settings that 0.8 ignores. */
 export const REMOVED_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "ALLOW_REGISTRATION", "OIDC_PASSWORD_LOGIN"];
 
