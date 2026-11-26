@@ -295,23 +295,31 @@ function FileBtn({ label, accept, onText }: { label: string; accept: string; onT
 
 function Account({ acc, error }: { acc: any; error: string | null }) {
   if (!acc) return <Err m={error} />;
-  const name = acc.oidc?.providerName, i = acc.identity;
+  const name = acc.oidc.providerName, i = acc.identity;
   return <section class="panel"><h2>Account</h2>
-    <div class="line"><div class="grow"><b>{acc.displayName ?? acc.username}</b>{acc.isAdmin && <i class="chip">Admin</i>}<div class="sub">{acc.username} · signs in with {[acc.hasPassword && "password", i && name].filter(Boolean).join(" or ")}</div></div></div>
-    {acc.oidc && <div class="line"><div class="grow"><b>{name}</b>{i && <i class="chip">Linked</i>}
-      <div class="sub">{i ? <>{[i.username, i.email].filter(Boolean).join(" · ") || "Linked"} · linked {day(i.linkedAt)}{i.lastLoginAt ? ` · last used ${ago(i.lastLoginAt)}` : ""}{i.unlinkBlocked && <><br />{i.unlinkBlocked}.</>}</> : `Link your ${name} identity to sign in to this account with it.`}</div></div>
-      {i ? <button class="btn danger" disabled={!!i.unlinkBlocked} title={i.unlinkBlocked ?? ""} onClick={() => confirm(`Unlink ${name}? You will sign in with your password.`) && attempt(() => api("DELETE", "/me/oidc/link"), "Unlinked")}>Unlink</button>
-        : <button class="btn tonal" onClick={() => attempt(async () => { location.href = (await api("POST", "/me/oidc/link", {})).url; })}>Link {name}</button>}</div>}</section>;
+    <div class="line"><div class="grow"><b>{acc.displayName ?? acc.username}</b>{acc.isAdmin && <i class="chip">Admin</i>}
+      <div class="sub">{acc.username} · signs in with {name}{i && [i.username, i.email].some(Boolean) ? ` as ${[i.username, i.email].filter(Boolean).join(" · ")}` : ""}{i?.lastLoginAt ? ` · last sign-in ${ago(i.lastLoginAt)}` : ""}</div></div></div>
+    <p class="sub">Your name, email, passkeys and sign-in methods are managed in {name}.</p></section>;
+}
+
+function Users({ me: self, users, error }: { me: number; users: any; error: string | null }) {
+  if (!users) return <section class="panel"><h2>Users</h2><Err m={error} /></section>;
+  const name = users.providerName;
+  return <section class="panel"><h2>Users</h2>
+    <p class="sub">{users.autoCreate ? `People get an account here the first time they sign in with ${name}. Choose who may sign in there (the client's allowed groups) or with OIDC_ALLOWED_GROUPS.`
+      : `New accounts aren't created automatically (OIDC_AUTO_CREATE=false), so only the people listed here can sign in. To add somebody, give them access in ${name} and let them sign in once while OIDC_AUTO_CREATE is true.`}</p>
+    {users.users.map((u: any) => <div class="line" key={u.id}><div class="grow"><b>{u.username}</b>{u.displayName && u.displayName !== u.username ? ` (${u.displayName})` : ""}{u.isAdmin && <i class="chip">Admin</i>}
+      <div class="sub">{u.oidc ? [name, u.email].filter(Boolean).join(" · ") : `Not linked to ${name}: can't sign in`} · {u.podcasts} podcasts · added {day(u.createdAt)}{u.lastLoginAt ? ` · last sign-in ${ago(u.lastLoginAt)}` : ""}</div></div>
+      {u.id !== self && <button class="btn danger" onClick={() => confirm(`Delete ${u.username} and all their data?`) && attempt(() => api("DELETE", `/users/${u.id}`), "Deleted")}>Delete</button>}</div>)}</section>;
 }
 
 function Settings() {
   const m = useStore(me)!, t = useStore(theme);
   const dev = useData<{ devices: any[] }>("/devices");
-  const users = useData<{ users: any[] }>(m.user.isAdmin ? "/users" : null);
+  const users = useData<any>(m.user.isAdmin ? "/users" : null);
   const acc = useData<any>("/me/account");
   const [res, setRes] = useState<string | null>(null);
   const signOut = async (provider: boolean) => { P.audio.pause(); let r: any = null; try { r = await api("POST", "/auth/logout", { provider }); } catch {} signedOut(); if (r?.endSessionUrl) location.href = r.endSessionUrl; };
-  const form = (f: (d: Record<string, string>) => Promise<unknown>, ok: string) => async (e: Event) => { e.preventDefault(); const el = e.currentTarget as HTMLFormElement; try { await f(Object.fromEntries(new FormData(el)) as any); el.reset(); say(ok); changed(); } catch (x: any) { say(x.message); } };
   return (
     <>
       <h1>Settings</h1>
@@ -326,13 +334,9 @@ function Settings() {
           <button class="btn" onClick={() => { const n = prompt("Device name", d.name); if (n) void attempt(() => api("PATCH", `/devices/${d.id}`, { name: n })); }}>Rename</button>
           {!d.current && <button class="btn danger" onClick={() => confirm(`Revoke ${d.name}?`) && attempt(() => api("DELETE", `/devices/${d.id}`), "Revoked")}>Revoke</button>}</div>)}</section>
       <Account acc={acc.data} error={acc.error} />
-      <section class="panel"><h2>Password</h2>{acc.data && !acc.data.hasPassword && <p class="sub">This account has no password yet. You can set one within 15 minutes of signing in.</p>}{acc.data && !acc.data.passwordLogin && <p class="sub">Password sign-in is switched off on this server.</p>}<form class="inline" onSubmit={form((d) => api("POST", "/me/password", d), "Password changed; other browsers were signed out")}>
-        {acc.data?.hasPassword !== false && <input type="password" name="password" placeholder="Current password" autocomplete="current-password" required />}<input type="password" name="newPassword" placeholder="New password (10+ characters)" minLength={10} autocomplete="new-password" required /><button class="btn tonal">Change</button></form></section>
-      {m.user.isAdmin && <section class="panel"><h2>Users</h2>
-        {users.data?.users.map((u) => <div class="line" key={u.id}><div class="grow"><b>{u.username}</b>{u.displayName && u.displayName !== u.username ? ` (${u.displayName})` : ""}{u.isAdmin && <i class="chip">Admin</i>}<div class="sub">{[u.password && "Password", u.oidc && acc.data?.oidc?.providerName].filter(Boolean).join(" + ") || "No sign-in method"} · {u.podcasts} podcasts · added {day(u.createdAt)}</div></div>{u.id !== m.user.id && <button class="btn danger" onClick={() => confirm(`Delete ${u.username} and all their data?`) && attempt(() => api("DELETE", `/users/${u.id}`), "Deleted")}>Delete</button>}</div>)}
-        <form class="inline" onSubmit={form((d) => api("POST", "/users", d), "User created")}><input name="username" placeholder="Username" required autocomplete="off" /><input type="password" name="password" placeholder="Password (10+ characters)" minLength={10} required autocomplete="new-password" /><button class="btn tonal">Add user</button></form></section>}
+      {m.user.isAdmin && <Users me={m.user.id} users={users.data} error={users.error} />}
       <section class="panel"><h2>Keyboard</h2><p class="sub">Space/K play · J or ← back 10 s · L or → forward 30 s · ↑↓ volume · N/P next/previous chapter · &lt; &gt; speed · M mute</p></section>
-      <div class="actions"><button class="btn" onClick={() => signOut(false)}>Sign out</button>{acc.data?.sessionVia === "oidc" && acc.data.oidc && <button class="btn" onClick={() => signOut(true)}>Sign out of {acc.data.oidc.providerName} too</button>}<span class="sub">{m.user.username} · Patchcast Sync {m.version}</span></div>
+      <div class="actions"><button class="btn" onClick={() => signOut(false)}>Sign out</button>{acc.data?.sessionVia === "oidc" && <button class="btn" onClick={() => signOut(true)}>Sign out of {acc.data.oidc.providerName} too</button>}<span class="sub">{m.user.username} · Patchcast Sync {m.version}</span></div>
     </>
   );
 }
@@ -392,25 +396,14 @@ function signedIn(m: Me) { setCsrf(m.csrf); me.set(m); P.connect(m.deviceId, BAS
 function signedOut() { P.disconnect(); P.audio.pause(); P.remote.set(null); me.set(null); }
 whenUnauthorized(signedOut);
 
+/** The only way in is the provider; there is no password form (0.8). */
 function SignIn() {
-  const [st, setSt] = useState<any>(null), [err, setErr] = useState<string | null>(null), [busy, setBusy] = useState(false), [reg, setReg] = useState(false);
+  const [st, setSt] = useState<any>(null), [err, setErr] = useState<string | null>(null);
   useEffect(() => { api("GET", "/status").then(setSt, (e) => setErr(e.message)); }, []);
-  const setup = st?.setupRequired, sso = st?.oidc?.enabled && !setup, pw = !st || setup || st.passwordLogin !== false;
-  const submit = async (e: Event) => {
-    e.preventDefault(); setBusy(true); setErr(null);
-    const d = Object.fromEntries(new FormData(e.currentTarget as HTMLFormElement)) as any;
-    try { signedIn(await api("POST", setup ? "/auth/setup" : reg ? "/auth/register" : "/auth/login", d)); } catch (x: any) { setErr(x.message); } finally { setBusy(false); }
-  };
-  return <main class="signin"><form onSubmit={submit}><img src={`${BASE}/icon.svg`} alt="" /><h1>Patchcast</h1>
-    <p class="sub">{setup ? "First run: create the administrator account. The setup token is in the server log." : reg ? "Create an account" : "Sign in to your sync server"}</p>
-    {sso && <a class="btn primary wide" href={`${BASE}/auth/oidc/login?returnTo=${encodeURIComponent(path.value + location.search)}`}>Sign in with {st.oidc.providerName}</a>}
-    {sso && pw && <div class="or"><span>or</span></div>}
-    {pw && <>{setup && <input name="token" placeholder="Setup token" autocomplete="off" required />}
-    <input name="username" placeholder="Username" autocomplete="username" autocapitalize="none" required />
-    <input name="password" type="password" placeholder={setup || reg ? "Password (10+ characters)" : "Password"} autocomplete={setup || reg ? "new-password" : "current-password"} required />
-    <Err m={err} /><button class={`btn wide ${sso ? "tonal" : "primary"}`} disabled={busy}>{setup || reg ? "Create account" : "Sign in"}</button></>}
-    {!pw && <Err m={err} />}
-    {st?.registrationOpen && <button type="button" class="btn wide" onClick={() => setReg(!reg)}>{reg ? "I have an account" : "Create an account"}</button>}</form></main>;
+  return <main class="signin"><form onSubmit={(e) => e.preventDefault()}><img src={`${BASE}/icon.svg`} alt="" /><h1>Patchcast</h1>
+    <p class="sub">Sign in to your sync server</p>
+    {st && <a class="btn primary wide" href={`${BASE}/auth/oidc/login?returnTo=${encodeURIComponent(path.value + location.search)}`}>Sign in with {st.oidc.providerName}</a>}
+    <Err m={err} /></form></main>;
 }
 
 function App() {

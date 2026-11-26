@@ -1,7 +1,7 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mergeQueue } from "../src/sync.ts";
-import { Device, withAdmin, type Ctx } from "./helpers.ts";
+import { Device, addUser, withAdmin, type Ctx } from "./helpers.ts";
 
 const FEED = "https://example.com/feed";
 const ep = (guid: string, o: any = {}) => ({ feedUrl: FEED, guid, ...o });
@@ -166,7 +166,7 @@ describe("sync", () => {
   });
 
   test("users are isolated; malformed pushes are rejected atomically", async () => {
-    await ctx.auth.createUser("other", "correct horse battery", false);
+    addUser(ctx, "other");
     const o = await new Device(ctx).login("Other", "other");
     await a.push({ episodes: [ep("1", { positionMs: 5 })] });
     assert.deepEqual((await o.pull()).json.episodes, []);

@@ -4,38 +4,23 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { Browser, Device, PW, makeApp, rss, serve, withAdmin, type Ctx } from "./helpers.ts";
-import { hashPassword, verifyPassword, LoginLimiter } from "../src/auth.ts";
+import { Writable } from "node:stream";
+import { Browser, Device, TEST_OIDC, addUser, makeApp, rss, serve, withAdmin, type Ctx } from "./helpers.ts";
+import { RateLimiter } from "../src/auth.ts";
 import { loadConfig, normalizeBasePath, parseTrustProxy } from "../src/config.ts";
 
 test("config parsing", () => {
   assert.equal(normalizeBasePath("podcasts/"), "/podcasts"); assert.equal(normalizeBasePath("/"), ""); assert.throws(() => normalizeBasePath("/a/../b")); assert.throws(() => normalizeBasePath("/a\"b"));
   assert.equal(parseTrustProxy("1"), 1); assert.equal(parseTrustProxy("true"), true); assert.equal(parseTrustProxy(""), false); assert.equal(parseTrustProxy("uniquelocal"), "uniquelocal");
-  assert.throws(() => loadConfig({ DATA_DIR: "/tmp", PORT: "abc" })); assert.throws(() => loadConfig({ DATA_DIR: "/tmp", SESSION_SECRET: "short" }));
+  assert.throws(() => loadConfig({ DATA_DIR: "/tmp", ...TEST_OIDC, PORT: "abc" }), /PORT/); assert.throws(() => loadConfig({ DATA_DIR: "/tmp", ...TEST_OIDC, SESSION_SECRET: "short" }), /SESSION_SECRET/);
 });
 
-test("argon2id hashes", async () => {
-  const h = await hashPassword(PW);
-  assert.match(h, /^\$argon2id\$m=19456,t=2,p=1\$/);
-  assert.equal(await verifyPassword(PW, h), true); assert.equal(await verifyPassword(PW + "x", h), false); assert.equal(await verifyPassword(PW, "junk"), false);
-  assert.notEqual(h, await hashPassword(PW));
-});
-
-test("first-run setup needs the token and only works once", async () => {
-  const ctx = await makeApp();
+test("the session secret is generated once, private to the server", async () => {
+  const ctx = await withAdmin();
   try {
-    const b = new Browser(ctx);
-    assert.equal((await b.req("GET", "/api/v1/status")).json.setupRequired, true);
-    assert.equal((await b.login()).status, 401);
-    const token = ctx.auth.ensureSetupToken();
-    assert.equal((await b.req("POST", "/api/v1/auth/setup", { token: "nope", username: "patch", password: PW })).status, 403);
-    assert.equal((await b.req("POST", "/api/v1/auth/setup", { token, username: "patch", password: "short" })).status, 400);
-    const r = await b.req("POST", "/api/v1/auth/setup", { token, username: "patch", password: PW });
-    assert.equal(r.status, 200); assert.equal(r.json.user.isAdmin, true);
-    assert.equal((await b.req("POST", "/api/v1/auth/setup", { token, username: "evil", password: PW })).status, 409);
-    assert.equal((await b.req("POST", "/api/v1/auth/register", { username: "x1", password: PW })).status, 403);
     const secret = join(ctx.dir, "session-secret");
     assert.ok(existsSync(secret)); assert.equal(statSync(secret).mode & 0o777, 0o600);
+    assert.equal(loadConfig({ DATA_DIR: ctx.dir, ...TEST_OIDC }).sessionSecret, readFileSync(secret, "utf8").trim());
   } finally { await ctx.stop(); }
 });
 
@@ -47,15 +32,16 @@ describe("auth", () => {
   test("every API route needs authentication", async () => {
     for (const [m, u] of [["GET", "/me"], ["GET", "/sync?since=0"], ["POST", "/sync"], ["GET", "/events"], ["GET", "/library"], ["GET", "/podcasts/1"], ["GET", "/episodes/1"], ["GET", "/episodes/1/chapters"], ["GET", "/new"], ["GET", "/queue"], ["PUT", "/queue"],
       ["POST", "/episodes/played"], ["POST", "/episodes/1/progress"], ["GET", "/latest"], ["POST", "/subscriptions"], ["DELETE", "/subscriptions/1"], ["PATCH", "/subscriptions/1"], ["POST", "/refresh"], ["GET", "/search?q=x"], ["GET", "/export/opml"], ["POST", "/import/opml"],
-      ["GET", "/export/history"], ["POST", "/import/history"], ["GET", "/art/x/y"], ["GET", "/chapter-art/1-0.jpg"], ["GET", "/audio/1"], ["GET", "/devices"], ["DELETE", "/devices/x"], ["GET", "/users"], ["POST", "/users"], ["DELETE", "/users/1"], ["POST", "/me/password"], ["POST", "/auth/logout"]])
+      ["GET", "/export/history"], ["POST", "/import/history"], ["GET", "/art/x/y"], ["GET", "/chapter-art/1-0.jpg"], ["GET", "/audio/1"], ["GET", "/devices"], ["DELETE", "/devices/x"], ["GET", "/users"], ["DELETE", "/users/1"], ["GET", "/me/account"], ["POST", "/auth/logout"]])
       assert.equal((await b.req(m, `/api/v1${u}`, m === "GET" || m === "DELETE" ? undefined : {})).status, 401, `${m} ${u}`);
   });
 
   test("cookie flags, CSRF and cross-site protection", async () => {
-    const r = await b.login();
-    assert.equal(r.status, 200);
-    const c = String(r.headers["set-cookie"]);
+    // The session cookie set by the OIDC callback is checked in oidc.test.ts; clearing it uses the same flags.
+    const x = new Browser(ctx); await x.login();
+    const c = String((await x.req("POST", "/api/v1/auth/logout", {})).headers["set-cookie"]);
     assert.match(c, /HttpOnly/); assert.match(c, /SameSite=Strict/); assert.match(c, /Path=\//); assert.doesNotMatch(c, /Secure/);
+    assert.equal((await b.login()).status, 200);
     assert.equal((await b.req("GET", "/api/v1/me")).json.user.username, "patch");
     const good = b.csrf;
     b.csrf = ""; assert.equal((await b.req("POST", "/api/v1/refresh", {})).json.error, "csrf");
@@ -64,7 +50,7 @@ describe("auth", () => {
     assert.equal((await b.req("POST", "/api/v1/refresh", {}, { origin: "https://evil.example" })).json.error, "bad_origin");
     assert.equal((await b.req("POST", "/api/v1/refresh", {}, { "sec-fetch-site": "cross-site" })).json.error, "cross_site");
     assert.equal((await b.req("POST", "/api/v1/refresh", {}, { origin: "http://localhost:80", host: "localhost:80" })).status, 200);
-    assert.equal((await new Browser(ctx).req("POST", "/api/v1/auth/login", { username: "patch", password: PW }, { origin: "https://evil.example" })).status, 403, "login CSRF");
+    assert.equal((await new Browser(ctx).req("POST", "/api/v1/auth/oidc/exchange", { code: "x", code_verifier: "y" }, { origin: "https://evil.example" })).status, 403, "cross-origin exchange");
     assert.equal((await b.req("GET", "/api/v1/me", undefined, { origin: "https://evil.example" })).headers["access-control-allow-origin"], undefined, "no CORS");
   });
 
@@ -74,21 +60,16 @@ describe("auth", () => {
     assert.equal(h["x-content-type-options"], "nosniff"); assert.equal(h["x-frame-options"], "DENY"); assert.equal(h["referrer-policy"], "no-referrer"); assert.equal(h["strict-transport-security"], undefined);
   });
 
-  test("login is rate limited per IP + user without locking other addresses out", async () => {
-    for (let i = 0; i < 5; i++) assert.equal((await b.login("patch", "wrong password!")).status, 401);
-    const r = await b.login();
-    assert.equal(r.status, 429); assert.ok(Number(r.headers["retry-after"]) > 0);
-    assert.equal((await new Browser(ctx, "198.51.100.7").login()).status, 200);
-    for (let i = 0; i < 15; i++) await b.login(`user${i}`, "wrong password!");
-    assert.equal((await b.login("fresh-user", "wrong password!")).status, 429, "per-IP cap");
-    const l = new LoginLimiter(1000);
-    for (let i = 0; i < 5; i++) assert.equal(l.take("2001:db8:1:2::" + i, "u", 0), 0);
-    assert.ok(l.take("2001:db8:1:2:ffff::1", "u", 10) > 0, "one IPv6 /64 is one attacker");
-    assert.equal(l.take("2001:db8:1:2::9", "u", 1500), 0, "window expires");
-  });
-
-  test("successful logins don't count towards the limit", async () => {
-    for (let i = 0; i < 12; i++) assert.equal((await new Browser(ctx).login()).status, 200);
+  test("the per-address limiter: windows, IPv6 /64s, successes", () => {
+    const l = new RateLimiter(1000);
+    for (let i = 0; i < 5; i++) assert.equal(l.takeIp("k", "2001:db8:1:2::" + i, 5, 0), 0);
+    assert.ok(l.takeIp("k", "2001:db8:1:2:ffff::1", 5, 10) > 0, "one IPv6 /64 is one attacker");
+    assert.equal(l.takeIp("k", "2001:db8:1:3::1", 5, 10), 0, "another /64 is not");
+    assert.equal(l.takeIp("other-kind", "2001:db8:1:2::1", 5, 10), 0, "budgets are per kind");
+    assert.equal(l.takeIp("k", "2001:db8:1:2::9", 5, 1500), 0, "window expires");
+    const m = new RateLimiter(1000);
+    for (let i = 0; i < 10; i++) { assert.equal(m.takeIp("k", "192.0.2.1", 3, 0), 0); m.successIp("k", "192.0.2.1"); }
+    assert.equal(m.takeIp("k", "::ffff:192.0.2.1", 3, 0), 0, "IPv4-mapped is the same address");
   });
 
   test("device tokens: issued, usable, listed, revocable, not stored in clear", async () => {
@@ -96,8 +77,9 @@ describe("auth", () => {
     assert.match(d.token, /^pct_/);
     assert.equal((await d.req("GET", "/api/v1/me")).json.deviceName, "Pixel 9");
     assert.equal(ctx.db.all("SELECT * FROM devices").some((r) => JSON.stringify(r).includes(d.token)), false);
-    assert.equal((await d.req("POST", "/api/v1/users", { username: "x1", password: PW })).status, 403, "tokens can't administer");
-    assert.equal((await d.req("POST", "/api/v1/me/password", { password: PW, newPassword: PW + "2" })).status, 403);
+    assert.equal((await d.req("GET", "/api/v1/users")).status, 403, "tokens can't administer");
+    assert.equal((await d.req("DELETE", "/api/v1/users/1")).status, 403);
+    assert.equal((await d.req("GET", "/api/v1/me/account")).status, 403);
     await b.login();
     assert.equal((await d.req("DELETE", `/api/v1/devices/${b.deviceId}`)).status, 403, "can't revoke others");
     const list = (await b.req("GET", "/api/v1/devices")).json.devices;
@@ -109,29 +91,30 @@ describe("auth", () => {
     assert.equal((await d2.req("GET", "/api/v1/me")).status, 401);
   });
 
-  test("logout and password change end sessions", async () => {
+  test("logout ends the session on the server", async () => {
     await b.login();
     const other = new Browser(ctx); await other.login();
-    assert.equal((await b.req("POST", "/api/v1/me/password", { password: "nope nope nope", newPassword: PW + "2" })).status, 403);
-    assert.equal((await b.req("POST", "/api/v1/me/password", { password: PW, newPassword: PW + "2" })).status, 200);
-    assert.equal((await other.req("GET", "/api/v1/me")).status, 401);
-    assert.equal((await b.req("GET", "/api/v1/me")).status, 200);
     const old = b.cookie;
     await b.req("POST", "/api/v1/auth/logout", {});
     b.cookie = old;
     assert.equal((await b.req("GET", "/api/v1/me")).status, 401, "server-side invalidation");
+    assert.equal((await other.req("GET", "/api/v1/me")).status, 200, "other sessions are unaffected");
   });
 
-  test("user administration", async () => {
+  test("user administration: list and delete; accounts are only created by signing in", async () => {
     await b.login();
-    const r = await b.req("POST", "/api/v1/users", { username: "sam", password: PW });
-    assert.equal(r.status, 200);
-    assert.equal((await b.req("POST", "/api/v1/users", { username: "SAM", password: PW })).status, 409);
+    const sam = addUser(ctx, "sam");
+    const list = (await b.req("GET", "/api/v1/users")).json;
+    assert.deepEqual([list.autoCreate, list.providerName], [true, "Pocket ID"]);
+    assert.deepEqual(list.users.map((u: any) => [u.username, u.isAdmin, u.oidc]), [["patch", true, true], ["sam", false, true]]);
+    assert.ok(list.users.every((u: any) => !("password" in u)), "no password column any more");
+    assert.equal((await b.req("POST", "/api/v1/users", { username: "x", password: "correct horse battery" })).status, 404, "create-with-password is gone");
     const s = new Browser(ctx); await s.login("sam");
     assert.equal((await s.req("GET", "/api/v1/users")).status, 403);
     assert.equal((await s.req("DELETE", "/api/v1/users/1")).status, 403);
     assert.equal((await b.req("DELETE", "/api/v1/users/1")).status, 400, "not yourself");
-    assert.equal((await b.req("DELETE", `/api/v1/users/${r.json.id}`)).status, 200);
+    assert.equal((await b.req("DELETE", `/api/v1/users/${sam}`)).status, 200);
+    assert.equal((await b.req("DELETE", `/api/v1/users/${sam}`)).status, 404);
     assert.equal((await s.req("GET", "/api/v1/me")).status, 401);
   });
 });
@@ -141,13 +124,15 @@ test("TRUST_PROXY: forwarded headers are honoured only when trusted", async () =
   const off = await withAdmin();
   const on = await withAdmin({ TRUST_PROXY: "uniquelocal" });
   try {
-    const x = new Browser(off, "10.0.0.2");
-    assert.equal((await x.req("POST", "/api/v1/auth/login", { username: "patch", password: PW }, hdr)).json.error, "bad_origin");
-    const y = new Browser(on, "10.0.0.2");
-    const r = await y.req("POST", "/api/v1/auth/login", { username: "patch", password: PW }, hdr);
-    assert.equal(r.status, 200); assert.match(String(r.headers["set-cookie"]), /; Secure/); assert.ok(r.headers["strict-transport-security"]);
-    const z = new Browser(on, "203.0.113.50"); // not a trusted proxy address
-    assert.equal((await z.req("POST", "/api/v1/auth/login", { username: "patch", password: PW }, hdr)).json.error, "bad_origin");
+    const x = new Browser(off, "10.0.0.2"); await x.login();
+    assert.equal((await x.req("POST", "/api/v1/refresh", {}, hdr)).json.error, "bad_origin");
+    const y = new Browser(on, "10.0.0.2"); await y.login();
+    const r = await y.req("POST", "/api/v1/refresh", {}, hdr);
+    assert.equal(r.status, 200); assert.ok(r.headers["strict-transport-security"]);
+    const lo = await y.req("POST", "/api/v1/auth/logout", {}, hdr);
+    assert.equal(lo.status, 200); assert.match(String(lo.headers["set-cookie"]), /; Secure/);
+    const z = new Browser(on, "203.0.113.50"); await z.login(); // not a trusted proxy address
+    assert.equal((await z.req("POST", "/api/v1/refresh", {}, hdr)).json.error, "bad_origin");
   } finally { await off.stop(); await on.stop(); }
 });
 
@@ -155,8 +140,9 @@ test("BASE_PATH: API, cookie path, index, manifest and redirect", async () => {
   const ctx = await withAdmin({ BASE_PATH: "/pods" }, { webDir: new URL("../web", import.meta.url).pathname });
   try {
     const b = new Browser(ctx);
-    const r = await b.login();
-    assert.match(String(r.headers["set-cookie"]), /Path=\/pods;/);
+    await b.login();
+    assert.match(String((await b.req("POST", "/api/v1/auth/logout", {})).headers["set-cookie"]), /Path=\/pods;/);
+    await b.login();
     const idx = await b.req("GET", "/");
     assert.match(idx.body, /\/pods\/app\.js/); assert.doesNotMatch(idx.body, /__BASE__/);
     assert.equal((await ctx.app.inject("/pods")).headers.location, "/pods/");
@@ -231,7 +217,7 @@ describe("library with a real HTTP feed host", () => {
     assert.ok(full.rawPayload.equals(audio));
     const html = await b.req("GET", `/api/v1/audio/${e2.id}`);
     assert.equal(html.status, 502); assert.doesNotMatch(html.body, /secret/);
-    await ctx.auth.createUser("sam", PW, false);
+    addUser(ctx, "sam");
     const o = new Browser(ctx); await o.login("sam");
     assert.equal((await o.req("GET", `/api/v1/audio/${e1.id}`)).status, 404);
     assert.equal((await o.req("GET", `/api/v1/episodes/${e1.id}`)).status, 404);
@@ -299,7 +285,7 @@ describe("library with a real HTTP feed host", () => {
     assert.deepEqual(out.episodes.map((e: any) => [e.guid, e.played, e.positionMs]).sort(), [["e1", true, 0], ["e2", false, 4242]]);
     assert.deepEqual([out.podcasts[0].priority, out.podcasts[0].playbackSpeed], [3, 1.2]);
     assert.equal((await b.req("POST", "/api/v1/import/history", { format: "x" })).status, 422);
-    await ctx.auth.createUser("sam", PW, false);
+    addUser(ctx, "sam");
     const o = new Browser(ctx); await o.login("sam");
     const opml = (await b.req("GET", "/api/v1/export/opml")).body;
     const im = (await o.req("POST", "/api/v1/import/opml", opml, { "content-type": "text/xml" })).json;
@@ -330,15 +316,17 @@ describe("library with a real HTTP feed host", () => {
 
 test("no secrets in logs", async () => {
   let out = "";
-  const ctx = await withAdmin({ LOG_LEVEL: "trace" }, { logger: undefined });
-  const orig = process.stdout.write;
+  const logStream = new Writable({ write(c, _e, cb) { out += c; cb(); } });
+  const ctx = await withAdmin({ LOG_LEVEL: "trace" }, { logStream }); // the server's own logger configuration
   try {
-    (process.stdout as any).write = (c: any, ...r: any[]) => { out += c; return orig.call(process.stdout, "", ...r); };
     const b = new Browser(ctx);
-    await b.login("patch", "super-secret-wrong-pw");
     await b.login();
+    await b.req("POST", "/api/v1/refresh", {});
     const d = await new Device(ctx).login("Phone");
     await d.pull();
-    assert.equal(out.includes("super-secret-wrong-pw") || out.includes(PW) || out.includes(d.token) || out.includes(b.cookie.split("=")[1]) || out.includes(b.csrf), false);
-  } finally { (process.stdout as any).write = orig; await ctx.stop(); }
+    await ctx.app.inject({ method: "GET", url: "/api/v1/me?token=query-secret", headers: { authorization: `Bearer ${d.token}x` } });
+    await ctx.app.inject({ method: "POST", url: "/api/v1/auth/oidc/exchange", payload: { code: "c".repeat(43), code_verifier: "body-secret-".repeat(4) } });
+    assert.ok(out.includes('"path":"/api/v1/me"'), "requests are logged"); assert.ok(out.includes('"path":"/api/v1/auth/oidc/exchange"'));
+    for (const x of [d.token, b.cookie.split("=")[1], b.csrf, "query-secret", "body-secret", "c".repeat(43)]) assert.ok(!out.includes(x), `log contains ${x.slice(0, 8)}…`);
+  } finally { await ctx.stop(); }
 });

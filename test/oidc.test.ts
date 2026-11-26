@@ -1,17 +1,18 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { Writable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { SignJWT } from "jose";
-import { Browser, Device, PW, makeApp, withAdmin, type Ctx } from "./helpers.ts";
+import { Browser, Device, TEST_OIDC, addUser, makeApp, withAdmin, type Ctx } from "./helpers.ts";
 import { mockIdp, type Idp } from "./mock-idp.ts";
-import { loadConfig } from "../src/config.ts";
+import { ConfigError, VERSION, loadConfig } from "../src/config.ts";
 import { Db } from "../src/db.ts";
+import pkg from "../package.json" with { type: "json" };
 import { deriveUsername, safeReturnTo } from "../src/oidc.ts";
 
 const PUBLIC = "http://pods.test";
@@ -40,27 +41,83 @@ class Sso extends Browser {
     if (r.status === 302 && this.jar.has("patchcast_session")) await this.req("GET", "/api/v1/me");
     return r;
   }
-  async link(idp: Idp) {
-    const s = await this.req("POST", "/api/v1/me/oidc/link", {});
-    assert.equal(s.status, 200, s.body);
-    return this.req("GET", `/auth/oidc/callback?${idp.authorize(s.json.url).query}`);
+  /** A session for an existing account without going through the provider. */
+  override async login(username = "patch") {
+    const u = this.ctx.db.get("SELECT id FROM users WHERE username=?", username)!;
+    this.jar.set("patchcast_session", this.ctx.auth.createSession(u.id, "Test browser").id);
+    return this.me();
   }
   me() { return this.req("GET", "/api/v1/me"); }
 }
 
-test("config", () => {
+test("config: OIDC is required", () => {
   const dir = mkdtempSync(join(tmpdir(), "pcs-")), b = { DATA_DIR: dir, PUBLIC_URL: "https://pod.example.com" };
-  assert.equal(loadConfig(b).oidc, null); assert.equal(loadConfig({ ...b, OIDC_ISSUER: "https://a.example" }).oidc, null); assert.equal(loadConfig({ ...b, OIDC_CLIENT_ID: "x" }).oidc, null);
+  const refused = (env: Record<string, string>, re: RegExp) => assert.throws(() => loadConfig(env), (e: any) => e instanceof ConfigError && re.test(e.message));
+  refused(b, /^OIDC_ISSUER, OIDC_CLIENT_ID are not set\. .*signs in only with an OpenID Connect provider/);
+  refused({ ...b, OIDC_ISSUER: "https://a.example" }, /^OIDC_CLIENT_ID is not set/);
+  refused({ ...b, OIDC_CLIENT_ID: "x" }, /^OIDC_ISSUER is not set/);
+  refused({ ...b, OIDC_ISSUER: " ", OIDC_CLIENT_ID: "x" }, /^OIDC_ISSUER is not set/); // compose passes blanks for unset variables
   const full = { ...b, OIDC_ISSUER: "https://auth.example.com/", OIDC_CLIENT_ID: "x" };
-  const o = loadConfig(full).oidc!;
-  assert.deepEqual([o.issuer, o.scopes, o.providerName, o.autoCreate, o.passwordLogin, o.allowedGroups, o.clientSecret], ["https://auth.example.com", "openid profile email groups", "Pocket ID", true, true, [], null]);
+  refused({ ...full, PUBLIC_URL: "" }, /^PUBLIC_URL is not set/);
+  refused({ ...full, PUBLIC_URL: "not a url" }, /PUBLIC_URL must be a URL/);
+  refused({ ...full, OIDC_ISSUER: "ftp://x" }, /plain http/); refused({ ...full, OIDC_AUTO_CREATE: "maybe" }, /OIDC_AUTO_CREATE/);
+  refused({ ...full, OIDC_CLIENT_SECRET_FILE: join(dir, "missing") }, /can't be read \(ENOENT\)/);
+  const o = loadConfig(full).oidc;
+  assert.deepEqual([o.issuer, o.scopes, o.providerName, o.autoCreate, o.allowedGroups, o.adminGroups, o.clientSecret], ["https://auth.example.com", "openid profile email groups", "Pocket ID", true, [], [], null]);
+  assert.ok(!("passwordLogin" in o));
   const f = join(dir, "secret"); writeFileSync(f, "  from-file\n");
-  assert.equal(loadConfig({ ...full, OIDC_CLIENT_SECRET_FILE: f }).oidc!.clientSecret, "from-file");
+  assert.equal(loadConfig({ ...full, OIDC_CLIENT_SECRET_FILE: f }).oidc.clientSecret, "from-file");
   assert.throws(() => loadConfig({ ...full, OIDC_CLIENT_SECRET_FILE: f, OIDC_CLIENT_SECRET: "y" }));
-  assert.throws(() => loadConfig({ ...full, PUBLIC_URL: "" }), /PUBLIC_URL/); assert.throws(() => loadConfig({ ...full, OIDC_ISSUER: "ftp://x" })); assert.throws(() => loadConfig({ ...full, OIDC_PASSWORD_LOGIN: "maybe" }));
   // Compose passes empty strings for unset variables.
-  const e = loadConfig({ ...full, OIDC_AUTO_CREATE: "", OIDC_PASSWORD_LOGIN: "false", OIDC_ALLOWED_GROUPS: " a, b ,", OIDC_SCOPES: "profile", OIDC_CLIENT_SECRET: "" }).oidc!;
-  assert.deepEqual([e.autoCreate, e.passwordLogin, e.allowedGroups, e.scopes, e.clientSecret], [true, false, ["a", "b"], "openid profile", null]);
+  const e = loadConfig({ ...full, OIDC_AUTO_CREATE: "", OIDC_ALLOWED_GROUPS: " a, b ,", OIDC_SCOPES: "profile", OIDC_CLIENT_SECRET: "" }).oidc;
+  assert.deepEqual([e.autoCreate, e.allowedGroups, e.scopes, e.clientSecret], [true, ["a", "b"], "openid profile", null]);
+  // Password-era settings are reported, not used.
+  assert.deepEqual(loadConfig({ ...full, ADMIN_USER: "patch", ADMIN_PASSWORD: "x", ALLOW_REGISTRATION: "true", OIDC_PASSWORD_LOGIN: "" }).ignored, ["ADMIN_USER", "ADMIN_PASSWORD", "ALLOW_REGISTRATION"]);
+  assert.equal(VERSION, pkg.version, "config.version is the package version");
+});
+
+test("nothing is written to DATA_DIR when the configuration is refused", () => {
+  const dir = join(mkdtempSync(join(tmpdir(), "pcs-")), "data");
+  assert.throws(() => loadConfig({ DATA_DIR: dir }));
+  assert.equal(existsSync(dir), false);
+});
+
+describe("the server process", () => {
+  const main = new URL("../src/main.ts", import.meta.url).pathname;
+  const run = (env: Record<string, string>, args: string[] = []) => spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", main, ...args],
+    { env: { PATH: process.env.PATH, DATA_DIR: mkdtempSync(join(tmpdir(), "pcs-")), LOG_LEVEL: "info", ...env }, encoding: "utf8", timeout: 20_000 });
+
+  test("refuses to start without OIDC, with a clear message and no stack trace", () => {
+    for (const env of [{}, { OIDC_ISSUER: "https://auth.example.com", OIDC_CLIENT_ID: "x" }, { OIDC_ISSUER: "https://auth.example.com", PUBLIC_URL: "https://pod.example.com" }] as Record<string, string>[]) {
+      const r = run(env);
+      assert.equal(r.status, 1, JSON.stringify(env)); assert.match(r.stderr, /^Patchcast Sync can't start: .*(OIDC_CLIENT_ID|OIDC_ISSUER|PUBLIC_URL).* not set/);
+      assert.doesNotMatch(r.stderr, /\n\s+at /, "no stack trace");
+    }
+  });
+  test("set-password is gone", () => {
+    const r = run({}, ["set-password", "patch"]);
+    assert.equal(r.status, 2); assert.match(r.stderr, /removed in 0\.8\.0/);
+  });
+  test("starts with OIDC, announces the first-admin rule and ignores password settings", async () => {
+    const port = String(20000 + Math.floor(Math.random() * 20000));
+    const p = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", main], {
+      env: { PATH: process.env.PATH, DATA_DIR: mkdtempSync(join(tmpdir(), "pcs-")), LOG_LEVEL: "info", PORT: port, HOST: "127.0.0.1", ...TEST_OIDC, ADMIN_USER: "patch", ADMIN_PASSWORD: "correct horse battery" } });
+    let out = "";
+    p.stdout.on("data", (c) => (out += c)); p.stderr.on("data", (c) => (out += c));
+    try {
+      let health: any = null;
+      for (let i = 0; i < 100 && !health; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        health = await fetch(`http://127.0.0.1:${port}/healthz`).then((r) => r.json(), () => null);
+      }
+      assert.deepEqual(health, { ok: true, version: VERSION });
+      const info = await (await fetch(`http://127.0.0.1:${port}/api/v1/server-info`)).json();
+      assert.deepEqual([info.passwordLogin, info.registrationOpen, info.setupRequired], [false, false, false]);
+      assert.match(out, /the first person to sign in with Pocket ID becomes the administrator/);
+      assert.match(out, /removed in 0\.8\.0.*ignored/); assert.match(out, /ADMIN_PASSWORD/);
+      assert.doesNotMatch(out, /correct horse battery|setup token/i);
+    } finally { p.kill("SIGTERM"); await new Promise((r) => p.once("exit", r)); }
+  });
 });
 
 test("returnTo never leaves the site", () => {
@@ -98,15 +155,29 @@ describe("oidc", () => {
   afterEach(async () => { await ctx.stop(); await idp.close(); });
   const users = () => ctx.db.all("SELECT username,is_admin,pw_hash,display_name FROM users ORDER BY id");
 
-  test("advertised; off without configuration", async () => {
-    assert.deepEqual((await b.req("GET", "/api/v1/server-info")).json.oidc, { enabled: true, providerName: "Pocket ID" });
-    const off = await withAdmin();
+  test("server-info: the provider is advertised and passwords are off, also before the first account", async () => {
+    const want = { name: "Patchcast Sync", version: VERSION, api: 1, setupRequired: false, registrationOpen: false, passwordLogin: false, oidc: { enabled: true, providerName: "Pocket ID" } };
+    assert.deepEqual((await b.req("GET", "/api/v1/server-info")).json, want);
+    assert.deepEqual((await b.req("GET", "/api/v1/status")).json, want);
+    const empty = await makeApp(env(idp, { OIDC_PROVIDER_NAME: "Example ID" }));
     try {
-      const x = new Browser(off);
-      assert.deepEqual((await x.req("GET", "/api/v1/server-info")).json.oidc, { enabled: false, providerName: null });
-      for (const u of ["/auth/oidc/login", "/auth/oidc/callback?state=x&code=y", "/auth/oidc/app"]) assert.equal((await x.req("GET", u)).status, 404, u);
-      assert.equal((await x.req("POST", "/api/v1/auth/oidc/exchange", {})).status, 404);
-    } finally { await off.stop(); }
+      assert.deepEqual((await new Browser(empty).req("GET", "/api/v1/server-info")).json, { ...want, oidc: { enabled: true, providerName: "Example ID" } });
+    } finally { await empty.stop(); }
+  });
+
+  test("password routes are gone: 404 signed in or not, and nothing is created", async () => {
+    const pw = { username: "patch", password: "correct horse battery", token: "x", deviceName: "x", newPassword: "another long password" };
+    const routes: [string, string][] = [["POST", "/api/v1/auth/login"], ["POST", "/api/v1/auth/register"], ["POST", "/api/v1/auth/setup"], ["POST", "/api/v1/auth/device"],
+      ["POST", "/api/v1/me/password"], ["POST", "/api/v1/users"], ["POST", "/api/v1/me/oidc/link"], ["DELETE", "/api/v1/me/oidc/link"], ["GET", "/api/v1/auth/login"]];
+    const before = ctx.db.all("SELECT * FROM users").length;
+    for (const [m, u] of routes) assert.equal((await b.req(m, u, m === "GET" || m === "DELETE" ? undefined : pw)).status, 404, `${m} ${u} signed out`);
+    await b.login();
+    for (const [m, u] of routes) {
+      const r = await b.req(m, u, m === "GET" || m === "DELETE" ? undefined : pw);
+      assert.equal(r.status, 404, `${m} ${u} as admin`); assert.equal(r.json.error, "not_found");
+    }
+    assert.equal(ctx.db.all("SELECT * FROM users").length, before);
+    assert.equal(ctx.db.get("SELECT pw_hash FROM users WHERE username='patch'")!.pw_hash, "");
   });
 
   test("login: request parameters, auto-create, cookie flags, second login re-uses the user", async () => {
@@ -124,8 +195,6 @@ describe("oidc", () => {
     idp.user.preferred_username = "renamed"; // same sub = same account
     await again.sso(idp);
     assert.equal((await again.me()).json.user.username, "alice"); assert.equal(users().length, 2);
-    // No password, so password sign-in fails even with an empty password.
-    assert.equal((await new Sso(ctx).login("alice", "")).status, 401); assert.equal((await new Sso(ctx).login("alice", PW)).status, 401);
   });
 
   test("identity is (issuer, sub): the same username or email never takes over an account", async () => {
@@ -165,18 +234,85 @@ describe("oidc", () => {
     assert.equal((await new Sso(ctx).sso(idp)).status, 502);
   });
 
-  test("first run: setup token still works, and SSO can't create a first non-admin", async () => {
-    await ctx.stop();
-    ctx = await makeApp(env(idp, { OIDC_ADMIN_GROUPS: "admins" })); b = new Sso(ctx);
-    const token = ctx.auth.ensureSetupToken();
-    const r = await b.sso(idp);
-    assert.equal(r.status, 403); assert.match(r.body, /no administrator/); assert.equal(ctx.auth.userCount(), 0);
-    assert.equal((await b.req("POST", "/api/v1/auth/setup", { token, username: "patch", password: PW })).status, 200);
-    await ctx.stop();
-    ctx = await makeApp(env(idp, { OIDC_ADMIN_GROUPS: "admins" })); b = new Sso(ctx); ctx.auth.ensureSetupToken();
-    idp.user.groups = ["admins"];
+  describe("first administrator", () => {
+    const fresh = async (more: Record<string, string> = {}) => { await ctx.stop(); ctx = await makeApp(env(idp, more)); b = new Sso(ctx); };
+    const as = (sub: string, groups: string[] = []) => { idp.user = { sub, preferred_username: sub, name: sub, email: `${sub}@example.com`, groups }; };
+
+    test("without OIDC_ADMIN_GROUPS the very first sign-in becomes administrator, nobody after it", async () => {
+      await fresh();
+      as("owner"); assert.equal((await b.sso(idp)).status, 302);
+      assert.deepEqual((await b.me()).json.user, { id: 1, username: "owner", isAdmin: true });
+      as("guest"); const g = new Sso(ctx); await g.sso(idp);
+      assert.equal((await g.me()).json.user.isAdmin, false);
+      as("owner"); const again = new Sso(ctx); await again.sso(idp);
+      assert.equal((await again.me()).json.user.isAdmin, true, "stays admin");
+      assert.deepEqual(users().map((u) => [u.username, u.is_admin]), [["owner", 1], ["guest", 0]]);
+    });
+
+    test("with OIDC_ADMIN_GROUPS only a member may be first; then others are ordinary users", async () => {
+      await fresh({ OIDC_ADMIN_GROUPS: "admins" });
+      as("guest", ["podcasts"]);
+      const r = await b.sso(idp);
+      assert.equal(r.status, 403); assert.match(r.body, /no administrator yet/); assert.equal(ctx.auth.userCount(), 0); assert.equal((await b.me()).status, 401);
+      as("owner", ["admins"]); await b.sso(idp);
+      assert.equal((await b.me()).json.user.isAdmin, true);
+      as("guest", ["podcasts"]); const g = new Sso(ctx); await g.sso(idp);
+      assert.equal((await g.me()).json.user.isAdmin, false);
+    });
+
+    test("the app is told setup_first, and gets nothing", async () => {
+      await fresh({ OIDC_ADMIN_GROUPS: "admins" });
+      as("guest");
+      const challenge = createHash("sha256").update("v".repeat(43)).digest("base64url");
+      const s = await b.req("GET", "/auth/oidc/app?" + new URLSearchParams({ code_challenge: challenge, redirect_uri: "patchcast://sync-callback", state: "app-state-1" }));
+      const r = await b.req("GET", `/auth/oidc/callback?${idp.authorize(String(s.headers.location)).query}`);
+      assert.equal(r.headers.location, "patchcast://sync-callback?error=setup_first&state=app-state-1"); assert.equal(ctx.auth.userCount(), 0);
+    });
+
+    test("OIDC_AUTO_CREATE=false creates nobody, not even the first", async () => {
+      await fresh({ OIDC_AUTO_CREATE: "false" });
+      as("owner", ["admins"]);
+      const r = await b.sso(idp);
+      assert.equal(r.status, 403); assert.match(r.body, /No account here/); assert.equal(ctx.auth.userCount(), 0);
+    });
+
+    test("an empty server in a not-allowed group still turns people away", async () => {
+      await fresh({ OIDC_ALLOWED_GROUPS: "family" });
+      as("stranger", ["other"]);
+      assert.equal((await b.sso(idp)).status, 403); assert.equal(ctx.auth.userCount(), 0);
+      as("owner", ["family"]); await b.sso(idp);
+      assert.equal((await b.me()).json.user.isAdmin, true);
+    });
+  });
+
+  test("upgrade from 0.7: linked accounts keep their sessions and tokens; password-only accounts are shut out", async () => {
+    // Accounts as 0.7 left them: 'patch' is linked (made by withAdmin); 'old' has only a password; 'moved' is linked to another issuer.
+    ctx.db.run("UPDATE users SET pw_hash='$argon2id$v' WHERE username='patch'");
+    const old = Number(ctx.db.run("INSERT INTO users(username,pw_hash,is_admin,created_at,pw_recovery_until) VALUES('old','$argon2id$x',1,1,?)", Date.now() + 86_400_000).lastInsertRowid);
+    const moved = addUser(ctx, "moved"); ctx.db.run("UPDATE identities SET issuer='https://old-idp.example' WHERE user_id=?", moved);
+    const session = (username: string) => { const x = new Sso(ctx); return x.login(username).then(() => x); };
+    const linked = await session("patch"); ctx.db.run("UPDATE sessions SET via='password'");
+    const linkedDev = await new Device(ctx).login("Old phone", "patch");
+    assert.equal((await linked.me()).status, 200); assert.equal((await linkedDev.pull()).status, 200);
+    for (const u of ["old", "moved"]) {
+      assert.equal((await (await session(u)).me()).status, 401, `${u}: browser session`);
+      assert.equal((await (await new Device(ctx).login("Phone", u)).pull()).status, 401, `${u}: device token`);
+    }
+    // Nothing is deleted or rewritten: the admin sees them and decides.
+    assert.equal(ctx.db.get("SELECT pw_hash FROM users WHERE id=?", old)!.pw_hash, "$argon2id$x");
+    const list = (await linked.req("GET", "/api/v1/users")).json.users;
+    assert.deepEqual(list.map((u: any) => [u.username, u.oidc]), [["patch", true], ["old", false], ["moved", false]]);
+    assert.equal((await linked.req("DELETE", `/api/v1/users/${old}`)).status, 200);
+    // Signing in with the provider still finds 'patch' by (issuer, sub), whatever its password column says.
+    idp.user = { ...idp.user, sub: "patch-sub" }; const x = new Sso(ctx); await x.sso(idp);
+    assert.deepEqual((await x.me()).json.user, { id: 1, username: "patch", isAdmin: true });
+  });
+
+  test("account page: identity from the provider, nothing about passwords or unlinking", async () => {
     await b.sso(idp);
-    assert.equal((await b.me()).json.user.isAdmin, true); assert.equal(ctx.auth.setupToken, null);
+    const acc = (await b.req("GET", "/api/v1/me/account")).json;
+    assert.deepEqual(Object.keys(acc).sort(), ["displayName", "identity", "isAdmin", "oidc", "sessionVia", "username"]);
+    assert.deepEqual([acc.username, acc.sessionVia, acc.identity.email, acc.oidc.providerName], ["alice", "oidc", "alice@example.com", "Pocket ID"]);
   });
 
   describe("hostile responses", () => {
@@ -276,70 +412,6 @@ describe("oidc", () => {
     assert.equal((await new Sso(ctx, "203.0.113.77").sso(idp)).status, 302, "other addresses are unaffected");
   });
 
-  test("link and unlink", async () => {
-    await b.login();
-    assert.equal((await b.req("POST", "/api/v1/me/oidc/link", {}, { "x-csrf-token": "bad" })).status, 403);
-    assert.equal((await b.req("POST", "/api/v1/me/oidc/link", {}, { host: "other.test" })).status, 400);
-    const r = await b.link(idp);
-    assert.equal(r.status, 302); assert.equal(r.headers.location, "/settings");
-    const acc = (await b.req("GET", "/api/v1/me/account")).json;
-    assert.equal(acc.identity.username, "alice"); assert.equal(acc.hasPassword, true); assert.equal(acc.identity.unlinkBlocked, null);
-    const x = new Sso(ctx);
-    await x.sso(idp); assert.equal((await x.me()).json.user.username, "patch"); assert.equal((await x.me()).json.user.isAdmin, true); assert.equal(users().length, 1);
-    const row = (await b.req("GET", "/api/v1/users")).json.users[0]; assert.deepEqual([row.password, row.oidc], [true, true]);
-    // A second identity can't be added, and the first can't be claimed by somebody else.
-    idp.user.sub = "sub-2"; assert.equal((await b.link(idp)).status, 409);
-    idp.user.sub = "sub-1";
-    await ctx.auth.createUser("bob", PW, false); const bob = new Sso(ctx); await bob.login("bob");
-    assert.equal((await bob.link(idp)).status, 409);
-    assert.equal((await b.req("DELETE", "/api/v1/me/oidc/link")).status, 200);
-    assert.equal((await b.req("DELETE", "/api/v1/me/oidc/link")).status, 404);
-    await new Sso(ctx).sso(idp); assert.equal(users().length, 3, "no longer linked");
-  });
-
-  test("a link attempt dies with its session", async () => {
-    await b.login();
-    const s = await b.req("POST", "/api/v1/me/oidc/link", {}), jar = new Map(b.jar);
-    await b.req("POST", "/api/v1/auth/logout", {}); b.jar = jar;
-    assert.equal((await b.req("GET", `/auth/oidc/callback?${idp.authorize(s.json.url).query}`)).status, 400);
-    assert.equal(ctx.db.all("SELECT * FROM identities").length, 0);
-  });
-
-  test("unlinking the only way to sign in is blocked; setting a first password needs a fresh session", async () => {
-    await b.sso(idp);
-    assert.equal((await b.req("DELETE", "/api/v1/me/oidc/link")).status, 409);
-    ctx.db.run("UPDATE sessions SET created_at=0");
-    assert.equal((await b.req("POST", "/api/v1/me/password", { newPassword: PW })).status, 403);
-    ctx.db.run("UPDATE sessions SET created_at=?", Date.now());
-    assert.equal((await b.req("POST", "/api/v1/me/password", { newPassword: PW })).status, 200);
-    assert.equal((await b.req("DELETE", "/api/v1/me/oidc/link")).status, 200);
-    assert.equal((await new Sso(ctx).login("alice")).status, 200);
-  });
-
-  test("OIDC_PASSWORD_LOGIN=false only bites once an admin is linked; set-password recovers", async () => {
-    await start({ OIDC_PASSWORD_LOGIN: "false", ALLOW_REGISTRATION: "true" });
-    assert.equal((await b.req("GET", "/api/v1/server-info")).json.passwordLogin, true);
-    await new Sso(ctx).sso(idp); // an ordinary user signing in isn't enough
-    assert.equal((await b.login()).status, 200);
-    idp.user = { ...idp.user, sub: "admin-sub", preferred_username: "p" };
-    assert.equal((await b.link(idp)).status, 302);
-    assert.equal((await b.req("GET", "/api/v1/server-info")).json.passwordLogin, false);
-    const r = await new Sso(ctx).login(); assert.equal(r.status, 403); assert.equal(r.json.error, "password_login_disabled");
-    assert.equal((await b.req("POST", "/api/v1/auth/device", { username: "patch", password: PW, deviceName: "x" })).status, 403);
-    assert.equal((await b.req("POST", "/api/v1/auth/register", { username: "newbie", password: PW })).status, 403);
-    assert.equal((await b.req("DELETE", "/api/v1/me/oidc/link")).status, 409, "would lock the account out");
-    // Recovery from the command line, against the same database.
-    const out = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", new URL("../src/main.ts", import.meta.url).pathname, "set-password", "patch"],
-      { input: "brand new password\n", env: { ...process.env, ...env(idp), OIDC_PASSWORD_LOGIN: "false", DATA_DIR: ctx.dir, LOG_LEVEL: "silent" }, encoding: "utf8" });
-    assert.equal(out.status, 0, out.stderr); assert.match(out.stdout, /24 hours/);
-    assert.equal((await b.req("GET", "/api/v1/server-info")).json.passwordLogin, true);
-    assert.equal((await new Sso(ctx).login("patch", "brand new password")).status, 200);
-    assert.equal((await new Sso(ctx).login("someone")).status, 403);
-    ctx.db.run("UPDATE users SET pw_recovery_until=1"); assert.equal((await new Sso(ctx).login("patch", "brand new password")).status, 403);
-    // The only linked admin disappears: passwords come back by themselves.
-    ctx.db.run("DELETE FROM identities WHERE sub='admin-sub'"); assert.equal((await new Sso(ctx).login("patch", "brand new password")).status, 200);
-  });
-
   test("logout: local by default, RP-initiated on request", async () => {
     await b.sso(idp);
     assert.equal((await b.req("POST", "/api/v1/auth/logout", {})).json.endSessionUrl, null);
@@ -348,7 +420,8 @@ describe("oidc", () => {
     const u = new URL((await b.req("POST", "/api/v1/auth/logout", { provider: true })).json.endSessionUrl);
     assert.equal(u.origin + u.pathname, `${idp.url}/logout`); assert.match(u.searchParams.get("id_token_hint")!, /^eyJ/); assert.equal(u.searchParams.get("post_logout_redirect_uri"), `${PUBLIC}/`);
     assert.equal((await b.me()).status, 401);
-    await b.login(); assert.equal((await b.req("POST", "/api/v1/auth/logout", { provider: true })).json.endSessionUrl, null, "password session");
+    await b.login(); ctx.db.run("UPDATE sessions SET via='password'");
+    assert.equal((await b.req("POST", "/api/v1/auth/logout", { provider: true })).json.endSessionUrl, null, "session from 0.7 without an ID token");
   });
 
   test("moves to PUBLIC_URL once; base path is kept", async () => {
