@@ -376,7 +376,7 @@ function PrefSelect<K extends keyof Prefs>({ k, label, options, unit = "" }: { k
   return <label class="check">{label} <select value={String(v)} onChange={(e) => { const o = list.find(([x]) => String(x) === e.currentTarget.value); if (o) void setPref(k, o[0]); }}>
     {list.map(([x, t]) => <option value={String(x)}>{t}</option>)}</select></label>;
 }
-function PrefToggle({ k, label }: { k: "autoQueueEnabled" | "autoDownloadEnabled" | "shuffleWhenQueueEnds"; label: string }) {
+function PrefToggle({ k, label }: { k: "autoQueueEnabled" | "autoDownloadEnabled" | "shuffleWhenQueueEnds" | "downloadWhileStreaming"; label: string }) {
   const v = useStore(prefs)[k];
   return <label class="check"><input type="checkbox" checked={v} onChange={(e) => void setPref(k, e.currentTarget.checked)} /> {label}</label>;
 }
@@ -407,6 +407,7 @@ function Settings() {
         <PrefSelect k="newEpisodeTimeoutDays" label="Remove unplayed new episodes after" unit=" days" options={[[1, "1 day"], [3, "3 days"], [7, "7 days"], [14, "14 days"], [30, "30 days"], [0, "never"]]} /></div></section>
       <section class="panel"><h2>Downloads in the apps</h2><p class="sub">The browser streams; these rules tell each phone, tablet and Mac what to download for itself.</p><div class="actions">
         <PrefToggle k="autoDownloadEnabled" label="Download new episodes automatically" />
+        <PrefToggle k="downloadWhileStreaming" label="Download while streaming (keeps playing if the connection drops)" />
         <PrefSelect k="retentionMode" label="Keep" options={[["KEEP_ALL", "all downloads"], ["KEEP_LATEST", "the latest N per podcast"], ["DELETE_PLAYED", "until played"]]} />
         {pr.retentionMode === "KEEP_LATEST" && <PrefSelect k="retentionKeep" label="N =" options={[1, 2, 3, 5, 10, 20].map((x) => [x, String(x)])} />}</div></section>
       <section class="panel"><h2>Import & export</h2><div class="actions">

@@ -7,14 +7,14 @@ export interface Prefs {
   autoQueueEnabled: boolean; autoQueuePosition: "FRONT" | "BACK"; newEpisodeTimeoutDays: number;
   autoDownloadEnabled: boolean; retentionMode: "KEEP_ALL" | "KEEP_LATEST" | "DELETE_PLAYED"; retentionKeep: number;
   themeMode: "SYSTEM" | "LIGHT" | "DARK"; dynamicColor: boolean;
-  shuffleWhenQueueEnds: boolean;
+  shuffleWhenQueueEnds: boolean; downloadWhileStreaming: boolean;
 }
 export const DEFAULTS: Prefs = {
   defaultSpeed: 1, skipBackSec: 10, skipForwardSec: 30,
   autoQueueEnabled: true, autoQueuePosition: "BACK", newEpisodeTimeoutDays: 14,
   autoDownloadEnabled: true, retentionMode: "KEEP_LATEST", retentionKeep: 3,
   themeMode: "SYSTEM", dynamicColor: true,
-  shuffleWhenQueueEnds: false,
+  shuffleWhenQueueEnds: false, downloadWhileStreaming: true,
 };
 
 const cached = (() => { try { return JSON.parse(localStorage.getItem("prefs") ?? "{}"); } catch { return {}; } })();

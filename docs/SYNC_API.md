@@ -117,6 +117,7 @@ another device already stored wins and the server only takes yours when it has n
 | `retentionKeep` | integer 1–100 (for `KEEP_LATEST`) | 3 |
 | `themeMode` | `"SYSTEM"`, `"LIGHT"`, `"DARK"` | `"SYSTEM"` |
 | `dynamicColor` | boolean (Android's Material You colours; other apps ignore it) | true |
+| `downloadWhileStreaming` | boolean: an episode played without a download is downloaded in the background (per device Wi-Fi rules) and playback continues from the file | true |
 | `shuffleWhenQueueEnds` | boolean: when Up Next runs out, play random episodes of subscribed podcasts; episodes not heard in the last 30 days are 4× as likely | false |
 
 A wrong value for one of these keys refuses the push (400). Any other key (1–64 characters: letters, digits, `.`, `_`, `-`,

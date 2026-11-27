@@ -31,6 +31,8 @@ export const SETTINGS: Record<string, Check> = {
   dynamicColor: bool,
   // Feature 2: when Up Next runs out, keep playing random episodes from subscribed podcasts.
   shuffleWhenQueueEnds: bool,
+  // Feature 5: playing an episode that isn't downloaded also downloads it in the apps (browsers just stream).
+  downloadWhileStreaming: bool,
 };
 
 const KEY = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
