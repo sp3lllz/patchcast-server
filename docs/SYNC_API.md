@@ -110,6 +110,7 @@ another device already stored wins and the server only takes yours when it has n
 | `retentionKeep` | integer 1–100 (for `KEEP_LATEST`) | 3 |
 | `themeMode` | `"SYSTEM"`, `"LIGHT"`, `"DARK"` | `"SYSTEM"` |
 | `dynamicColor` | boolean (Android's Material You colours; other apps ignore it) | true |
+| `shuffleWhenQueueEnds` | boolean: when Up Next runs out, play random episodes of subscribed podcasts; episodes not heard in the last 30 days are 4× as likely | false |
 
 A wrong value for one of these keys refuses the push (400). Any other key (1–64 characters: letters, digits, `.`, `_`, `-`,
 starting with a letter) is stored as given, up to 4 KB of JSON, so newer apps can sync settings an older server doesn't
@@ -129,6 +130,7 @@ progress made elsewhere. Back off exponentially on errors; keep changes until a 
 
 ## Web client API (same authentication)
 `GET /library`, `/podcasts/:id`, `/episodes/:id`, `/episodes/:id/chapters`, `/new?days=14`, `/queue`, `/latest`, `/search?q=` · `PUT /queue {base:[id],items:[id],auto:[id]}` ·
+`GET /shuffle?exclude=<episodeId>` (0.10+) → `{episode}` a weighted random episode of a subscribed podcast ·
 `GET /history?limit=50` (0.10+) → `{episodes}` most recently played first, queued ones left out ·
 `GET /settings` → `{settings:[{key,value,changedAt,rev,updatedAt,deviceId}]}`, `PUT /settings {values:{key:value}}` (0.10+) ·
 `POST /episodes/played {ids,played}`, `/episodes/:id/progress {positionMs,durationMs,playing,finished,changedAt,clientTime}`, `/subscriptions {url}`, `/refresh {podcastId?}` ·

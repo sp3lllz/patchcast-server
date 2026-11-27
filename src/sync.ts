@@ -33,6 +33,18 @@ export function shouldAutoFinish(e: { played: boolean; positionMs: number; durat
   return e.pausedAt >= since && now - e.pausedAt >= AUTO_FINISH_GRACE_MS;
 }
 
+/** Feature 2 (0.10.0): shuffle when the queue ends. Not heard in the last 30 days (or never) = this many times as likely. */
+export const SHUFFLE_RECENT_MS = 30 * 86_400_000;
+export const SHUFFLE_FRESH_WEIGHT = 4;
+/** Weighted random pick (the apps carry the same one). `rnd` in [0, 1). */
+export function pickShuffle<T>(cands: { item: T; lastPlayedAt: number | null }[], now: number, rnd: number): T | null {
+  if (!cands.length) return null;
+  const w = cands.map((c) => (c.lastPlayedAt != null && now - c.lastPlayedAt < SHUFFLE_RECENT_MS ? 1 : SHUFFLE_FRESH_WEIGHT));
+  let x = rnd * w.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < cands.length; i++) { x -= w[i]; if (x < 0) return cands[i].item; }
+  return cands[cands.length - 1].item;
+}
+
 /** Different devices this close together in time may disagree on the position by clock error alone… */
 export const SKEW_WINDOW_MS = 60_000;
 /** …so a backwards move smaller than this from another device is treated as noise, not a rewind. */

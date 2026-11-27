@@ -29,6 +29,8 @@ export const SETTINGS: Record<string, Check> = {
   retentionKeep: int(1, 100),
   themeMode: oneOf("SYSTEM", "LIGHT", "DARK"),
   dynamicColor: bool,
+  // Feature 2: when Up Next runs out, keep playing random episodes from subscribed podcasts.
+  shuffleWhenQueueEnds: bool,
 };
 
 const KEY = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;

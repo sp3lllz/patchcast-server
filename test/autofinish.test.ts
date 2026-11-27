@@ -75,3 +75,19 @@ describe("auto-finish on the server (feature 7)", () => {
     assert.equal((await state()).played, false);
   });
 });
+
+import { pickShuffle, SHUFFLE_RECENT_MS } from "../src/sync.ts";
+test("shuffle pick (feature 2): weighted towards episodes not heard in 30 days, empty → null", () => {
+  const now = 10 * SHUFFLE_RECENT_MS;
+  const c = [{ item: "recent", lastPlayedAt: now - 1000 }, { item: "old", lastPlayedAt: now - SHUFFLE_RECENT_MS - 1 }, { item: "never", lastPlayedAt: null }];
+  // Weights 1, 4, 4 → total 9.
+  assert.equal(pickShuffle(c, now, 0), "recent");
+  assert.equal(pickShuffle(c, now, 0.999 / 9), "recent");
+  assert.equal(pickShuffle(c, now, 1 / 9), "old");
+  assert.equal(pickShuffle(c, now, 4.999 / 9), "old");
+  assert.equal(pickShuffle(c, now, 5 / 9), "never");
+  assert.equal(pickShuffle(c, now, 0.9999), "never");
+  assert.equal(pickShuffle([], now, 0.5), null);
+  let recent = 0; for (let i = 0; i < 9000; i++) if (pickShuffle(c, now, i / 9000) === "recent") recent++;
+  assert.equal(recent, 1000);
+});

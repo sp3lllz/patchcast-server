@@ -125,6 +125,11 @@ audio.addEventListener("ended", async () => {
     const q = await api<{ items: Episode[] }>("GET", "/queue");
     const next = q.items.find((e) => e.id !== ep?.id);
     if (next) await play(next.id);
+    else if (prefs.value.shuffleWhenQueueEnds) {
+      // Feature 2: Up Next ran out: a random episode of a subscribed podcast, favouring ones not heard lately.
+      const r = await api<{ episode: Episode | null }>("GET", `/shuffle?exclude=${ep?.id ?? 0}`);
+      if (r.episode) { say(`Shuffle: ${r.episode.title}`); await play(r.episode.id); }
+    }
   } catch {}
 });
 // A tab closing while playing keeps its last position.
@@ -173,7 +178,12 @@ export function nextChapter() {
   void (async () => {
     const q = await api<{ items: Episode[] }>("GET", "/queue");
     const next = q.items.find((e) => e.id !== ep?.id);
-    if (next) await play(next.id); else say("Up Next is empty");
+    if (next) await play(next.id);
+    else if (prefs.value.shuffleWhenQueueEnds) {
+      // Feature 2: Up Next ran out: a random episode of a subscribed podcast, favouring ones not heard lately.
+      const r = await api<{ episode: Episode | null }>("GET", `/shuffle?exclude=${ep?.id ?? 0}`);
+      if (r.episode) { say(`Shuffle: ${r.episode.title}`); await play(r.episode.id); }
+    } else say("Up Next is empty");
   })().catch((e) => say(e.message));
 }
 export function prevChapter() {

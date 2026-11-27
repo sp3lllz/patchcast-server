@@ -7,7 +7,7 @@ import { Db, type Row } from "./db.ts";
 import { Auth, AuthError, RateLimiter, SESSION_MS, safeEqual, type Principal } from "./auth.ts";
 import { Events } from "./events.ts";
 import { Feeds } from "./feeds.ts";
-import { SyncStore, SyncError, cleanSettings, settingOut, stateOut, subOut, type EpisodeChange } from "./sync.ts";
+import { SyncStore, SyncError, cleanSettings, settingOut, stateOut, subOut, pickShuffle, type EpisodeChange } from "./sync.ts";
 import { FetchError, Semaphore, safeFetch, safeOpen, USER_AGENT } from "./net.ts";
 import { FeedParseError, httpUrl, stripTags } from "./feed.ts";
 import { feedKey, normalizeFeedUrl } from "./urls.ts";
@@ -369,6 +369,16 @@ export async function buildApp(o: AppOptions) {
         if (!res.duplicate) broadcastLive(p, { ...ref(e), positionMs: position, durationMs: b.durationMs, playing: b.playing });
         return { rev: res.rev };
       });
+      // Feature 2 (0.10.0): a random episode of a subscribed podcast for "shuffle when Up Next ends" (web player).
+      a.get("/api/v1/shuffle", async (req) => {
+        const u = P(req).userId, exclude = Number((req.query as any).exclude) || 0;
+        const cands = db.all(`SELECT e.id, s.last_played_at FROM episodes e JOIN feeds f ON f.id=e.feed_id
+          JOIN subscriptions sub ON sub.user_id=? AND sub.feed_key=f.key AND sub.deleted=0
+          LEFT JOIN episode_state s ON s.user_id=? AND s.feed_key=f.key AND s.guid=e.guid WHERE e.id<>?`, u, u, exclude);
+        const id = pickShuffle(cands.map((c) => ({ item: c.id as number, lastPlayedAt: c.last_played_at ?? null })), Date.now(), Math.random());
+        return { episode: id == null ? null : ep(db.get(`${EP} WHERE e.id=?`, u, id)!) };
+      });
+
       // 0.10.0: play history (scroll up on Up Next). Most recently played first; what is in the queue is left out.
       a.get("/api/v1/history", async (req) => {
         const u = P(req).userId, limit = Math.min(Math.max(Number((req.query as any).limit) || 50, 1), 200);

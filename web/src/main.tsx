@@ -338,7 +338,7 @@ function PrefSelect<K extends keyof Prefs>({ k, label, options, unit = "" }: { k
   return <label class="check">{label} <select value={String(v)} onChange={(e) => { const o = list.find(([x]) => String(x) === e.currentTarget.value); if (o) void setPref(k, o[0]); }}>
     {list.map(([x, t]) => <option value={String(x)}>{t}</option>)}</select></label>;
 }
-function PrefToggle({ k, label }: { k: "autoQueueEnabled" | "autoDownloadEnabled"; label: string }) {
+function PrefToggle({ k, label }: { k: "autoQueueEnabled" | "autoDownloadEnabled" | "shuffleWhenQueueEnds"; label: string }) {
   const v = useStore(prefs)[k];
   return <label class="check"><input type="checkbox" checked={v} onChange={(e) => void setPref(k, e.currentTarget.checked)} /> {label}</label>;
 }
@@ -360,7 +360,9 @@ function Settings() {
         <PrefSelect k="defaultSpeed" label="Default speed" unit="×" options={[0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3].map((x) => [x, `${x}×`])} />
         <PrefSelect k="skipBackSec" label="Skip back" unit=" s" options={secs([5, 10, 15, 20, 30, 45, 60])} />
         <PrefSelect k="skipForwardSec" label="Skip forward" unit=" s" options={secs([10, 15, 20, 30, 45, 60, 90, 120])} /></div>
-        <p class="sub">A podcast's own speed (on its page) wins over the default.</p></section>
+        <p class="sub">A podcast's own speed (on its page) wins over the default.</p>
+        <div class="actions"><PrefToggle k="shuffleWhenQueueEnds" label="When Up Next ends, shuffle episodes from your podcasts" /></div>
+        <p class="sub">Plays random episodes from the podcasts you follow, favouring ones you haven't listened to in the last 30 days.</p></section>
       <section class="panel"><h2>New episodes</h2><div class="actions">
         <PrefToggle k="autoQueueEnabled" label="Add new episodes to Up Next" />
         <PrefSelect k="autoQueuePosition" label="Add them at the" options={[["FRONT", "front"], ["BACK", "back"]]} />
