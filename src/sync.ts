@@ -21,6 +21,18 @@ export interface PushBody {
 }
 export interface PushResult { rev: number; serverTime: number; subscriptions: number; episodes: number; queue: boolean; settings: number; skipped: number; duplicate?: boolean }
 
+/** Feature 7 (0.10.0): an episode with less than this left… */
+export const AUTO_FINISH_REMAINING_MS = 5 * 60_000;
+/** …that isn't resumed on any device within this long after it was paused or stopped counts as played. */
+export const AUTO_FINISH_GRACE_MS = 10 * 60_000;
+
+/** The rule itself (the apps carry the same one for when there is no server). */
+export function shouldAutoFinish(e: { played: boolean; positionMs: number; durationMs: number | null; pausedAt: number }, now: number, since: number): boolean {
+  if (e.played || !e.durationMs || e.durationMs <= 0 || e.positionMs <= 0) return false;
+  if (e.durationMs - e.positionMs >= AUTO_FINISH_REMAINING_MS) return false;
+  return e.pausedAt >= since && now - e.pausedAt >= AUTO_FINISH_GRACE_MS;
+}
+
 /** Different devices this close together in time may disagree on the position by clock error alone… */
 export const SKEW_WINDOW_MS = 60_000;
 /** …so a backwards move smaller than this from another device is treated as noise, not a rewind. */
@@ -241,6 +253,40 @@ export class SyncStore {
     return changed;
   }
 
+  // ------------------------------------------------------------------ feature 7: nearly finished + abandoned = played
+
+  autoFinishSince(): number {
+    return Number((this.db.get("SELECT value FROM meta WHERE key='auto_finish_since'") as Row | undefined)?.value ?? Number.MAX_SAFE_INTEGER);
+  }
+
+  /**
+   * Marks episodes played that have < 5 min left and whose last position (a pause, stop or the last progress while playing)
+   * is ≥ 10 min old, on every device. Any progress resets the clock, so listening anywhere prevents it. Like a finish: position 0,
+   * gone from the queue. Returns the number marked. `userId` limits it to one user (done before every pull).
+   */
+  autoFinish(userId?: number): number {
+    const now = this.now(), since = this.autoFinishSince();
+    const rows = this.db.all(`SELECT user_id, feed_key, guid, position_ms, position_at, duration_ms FROM episode_state
+      WHERE played=0 AND position_ms>0 AND duration_ms>0 AND duration_ms-position_ms<? AND position_at>=? AND position_at<=? ${userId != null ? "AND user_id=?" : ""}`,
+      ...[AUTO_FINISH_REMAINING_MS, since, now - AUTO_FINISH_GRACE_MS, ...(userId != null ? [userId] : [])]);
+    let n = 0;
+    const touched = new Map<number, number>();
+    for (const r of rows) {
+      if (!shouldAutoFinish({ played: false, positionMs: r.position_ms, durationMs: r.duration_ms, pausedAt: r.position_at }, now, since)) continue;
+      const at = r.position_at + AUTO_FINISH_GRACE_MS;
+      this.db.tx(() => {
+        const rev = this.bump(r.user_id);
+        this.db.run(`UPDATE episode_state SET played=1, played_at=?, unplayed_explicit=0, completed_at=?, position_ms=0, position_at=?, position_device=NULL,
+          rev=?, updated_at=?, device_id=NULL WHERE user_id=? AND feed_key=? AND guid=? AND played=0`, at, at, at, rev, now, r.user_id, r.feed_key, r.guid);
+        this.dropFromQueue(r.user_id, "server", now, (q) => q.feed_key === r.feed_key && q.guid === r.guid);
+        touched.set(r.user_id, this.rev(r.user_id));
+      });
+      n++;
+    }
+    for (const [u, rev] of touched) this.onChange(u, rev, null);
+    return n;
+  }
+
   // ------------------------------------------------------------------ queue
 
   queue(userId: number): Row[] {
@@ -308,6 +354,7 @@ export class SyncStore {
   // ------------------------------------------------------------------ pull
 
   pull(userId: number, since: number, opts: { limit?: number; feedUrl?: string } = {}) {
+    this.autoFinish(userId); // lazily, so a pull never shows an episode that should already count as played
     const limit = Math.min(Math.max(opts.limit ?? 1000, 1), 5000);
     const current = this.rev(userId);
     const key = opts.feedUrl ? feedKey(opts.feedUrl) : null;

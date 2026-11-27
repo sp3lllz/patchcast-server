@@ -577,7 +577,10 @@ export async function buildApp(o: AppOptions) {
   if (base) app.get("/healthz", { logLevel: "silent" }, async () => ({ ok: true })); // container healthcheck path is prefix-independent
 
   app.addHook("preClose", async () => { feeds.close(); events.close(); });
-  app.addHook("onClose", async () => db.close());
+  // Feature 7: check every minute for nearly finished episodes nobody resumed.
+  const autoFinish = setInterval(() => { try { const n = sync.autoFinish(); if (n) app.log.info({ n }, "marked nearly finished, abandoned episodes as played"); } catch (e: any) { app.log.error({ err: String(e?.message) }, "auto-finish failed"); } }, 60_000);
+  autoFinish.unref();
+  app.addHook("onClose", async () => { clearInterval(autoFinish); db.close(); });
 
   return { app, db, auth, sync, feeds, events };
 }

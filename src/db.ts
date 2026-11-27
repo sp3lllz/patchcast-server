@@ -131,6 +131,12 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX user_settings_rev ON user_settings(user_id, rev);
   `,
+  // 0.10.0 (feature 7): server facts. auto_finish_since = when this server started marking nearly-finished, abandoned episodes
+  // as played; only pauses after that count, so old half-listened episodes aren't all marked at once.
+  `
+  CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  INSERT INTO meta(key, value) VALUES ('auto_finish_since', CAST(CAST(strftime('%s','now') AS INTEGER) * 1000 AS TEXT));
+  `,
 ];
 
 function migrate(db: Db) {

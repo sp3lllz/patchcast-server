@@ -86,6 +86,12 @@ Limits: 5000 episodes, 2000 subscriptions, 200 settings (500 stored per user), 8
 | User settings | Per key: newest `changedAt` wins, a tie keeps the stored value (`mode: "force"` wins ties) |
 | Queue | Three-way: the difference between `base` (the list as you last synced it) and `items` is applied to the server's current list, so concurrent adds, removals and moves combine. Items finished elsewhere aren't re-added automatically. Finishing an episode or unsubscribing removes it. Removed items stay as tombstones on the server. Leave items you can't show out of `base`: the server keeps them |
 
+### Nearly finished, abandoned (0.10+)
+An unplayed episode with less than 5 minutes left whose last position (a pause, stop or the last progress while playing) is at least
+10 minutes old is marked played by the server, as a finish (position 0, out of the queue, `completedAt` = that position time + 10 min,
+`deviceId: null`). Checked every minute and before every pull, so any progress pushed from any device restarts the 10 minutes. Only
+positions stored after the server was upgraded to 0.10 count. Apps apply the same rule locally when there is no server.
+
 ### Settings (0.10+)
 Settings that follow the user to every device. Things that belong to one device (Wi-Fi only, battery/charging, refresh
 interval, notifications, storage, the device's name) are never sent. A key this device has never agreed with the server
