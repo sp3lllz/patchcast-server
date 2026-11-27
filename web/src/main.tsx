@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError, BASE, setCsrf, whenUnauthorized, type Chapter, type Episode, type Podcast } from "./api.ts";
 import { ago, dataVersion, day, dur, fmt, say, Store, toast, useStore } from "./store.ts";
 import * as P from "./player.ts";
+import { prefs, loadPrefs, setPref, type Prefs } from "./settings.ts";
 import { header, predict, short } from "./predict.ts";
 
 // ------------------------------------------------------------ routing
@@ -15,9 +16,9 @@ function A({ to, children, ...p }: { to: string; children: ComponentChildren; cl
 const expanded = new Store(false);
 interface Me { user: { id: number; username: string; isAdmin: boolean }; deviceId: string; csrf: string; version: string }
 const me = new Store<Me | null | undefined>(undefined);
-const theme = new Store(localStorage.getItem("theme") ?? "system");
-const applyTheme = () => { document.documentElement.dataset.theme = theme.value; localStorage.setItem("theme", theme.value); };
-theme.sub(applyTheme); applyTheme();
+// Appearance is a synced setting (0.10.0): the same theme on every device.
+const applyTheme = () => { const t = prefs.value.themeMode.toLowerCase(); document.documentElement.dataset.theme = t; localStorage.setItem("theme", t); };
+prefs.sub(applyTheme); applyTheme();
 
 // ------------------------------------------------------------ icons
 const I: Record<string, string> = {
@@ -313,8 +314,22 @@ function Users({ me: self, users, error }: { me: number; users: any; error: stri
       {u.id !== self && <button class="btn danger" onClick={() => confirm(`Delete ${u.username} and all their data?`) && attempt(() => api("DELETE", `/users/${u.id}`), "Deleted")}>Delete</button>}</div>)}</section>;
 }
 
+/** A labelled select bound to one synced setting. */
+function PrefSelect<K extends keyof Prefs>({ k, label, options, unit = "" }: { k: K; label: string; options: [Prefs[K], string][]; unit?: string }) {
+  const v = useStore(prefs)[k];
+  // A value chosen in another app (e.g. 1.3×) stays listed and selected.
+  const list = options.some(([x]) => x === v) ? options : [...options, [v, `${v}${unit}`] as [Prefs[K], string]].sort((a, b) => (typeof a[0] === "number" && typeof b[0] === "number" ? a[0] - b[0] : 0));
+  return <label class="check">{label} <select value={String(v)} onChange={(e) => { const o = list.find(([x]) => String(x) === e.currentTarget.value); if (o) void setPref(k, o[0]); }}>
+    {list.map(([x, t]) => <option value={String(x)}>{t}</option>)}</select></label>;
+}
+function PrefToggle({ k, label }: { k: "autoQueueEnabled" | "autoDownloadEnabled"; label: string }) {
+  const v = useStore(prefs)[k];
+  return <label class="check"><input type="checkbox" checked={v} onChange={(e) => void setPref(k, e.currentTarget.checked)} /> {label}</label>;
+}
+const secs = (xs: number[]) => xs.map((x) => [x, `${x} s`] as [number, string]);
+
 function Settings() {
-  const m = useStore(me)!, t = useStore(theme);
+  const m = useStore(me)!, pr = useStore(prefs);
   const dev = useData<{ devices: any[] }>("/devices");
   const users = useData<any>(m.user.isAdmin ? "/users" : null);
   const acc = useData<any>("/me/account");
@@ -323,7 +338,21 @@ function Settings() {
   return (
     <>
       <h1>Settings</h1>
-      <section class="panel"><h2>Appearance</h2><div class="tabs">{["system", "light", "dark"].map((x) => <button class={t === x ? "on" : ""} onClick={() => theme.set(x)}>{x[0].toUpperCase() + x.slice(1)}</button>)}</div></section>
+      <p class="sub">Playback, new-episode, download and appearance settings are the same on all your devices: a change here reaches your phone, tablet and Mac. Wi-Fi only, battery and storage options stay on each device, and downloaded files are never synced.</p>
+      <section class="panel"><h2>Appearance</h2><div class="tabs" role="group" aria-label="Theme">{(["SYSTEM", "LIGHT", "DARK"] as const).map((x) => <button class={pr.themeMode === x ? "on" : ""} aria-pressed={pr.themeMode === x} onClick={() => void setPref("themeMode", x)}>{x[0] + x.slice(1).toLowerCase()}</button>)}</div></section>
+      <section class="panel"><h2>Playback</h2><div class="actions">
+        <PrefSelect k="defaultSpeed" label="Default speed" unit="×" options={[0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3].map((x) => [x, `${x}×`])} />
+        <PrefSelect k="skipBackSec" label="Skip back" unit=" s" options={secs([5, 10, 15, 20, 30, 45, 60])} />
+        <PrefSelect k="skipForwardSec" label="Skip forward" unit=" s" options={secs([10, 15, 20, 30, 45, 60, 90, 120])} /></div>
+        <p class="sub">A podcast's own speed (on its page) wins over the default.</p></section>
+      <section class="panel"><h2>New episodes</h2><div class="actions">
+        <PrefToggle k="autoQueueEnabled" label="Add new episodes to Up Next" />
+        <PrefSelect k="autoQueuePosition" label="Add them at the" options={[["FRONT", "front"], ["BACK", "back"]]} />
+        <PrefSelect k="newEpisodeTimeoutDays" label="Remove unplayed new episodes after" unit=" days" options={[[1, "1 day"], [3, "3 days"], [7, "7 days"], [14, "14 days"], [30, "30 days"], [0, "never"]]} /></div></section>
+      <section class="panel"><h2>Downloads in the apps</h2><p class="sub">The browser streams; these rules tell each phone, tablet and Mac what to download for itself.</p><div class="actions">
+        <PrefToggle k="autoDownloadEnabled" label="Download new episodes automatically" />
+        <PrefSelect k="retentionMode" label="Keep" options={[["KEEP_ALL", "all downloads"], ["KEEP_LATEST", "the latest N per podcast"], ["DELETE_PLAYED", "until played"]]} />
+        {pr.retentionMode === "KEEP_LATEST" && <PrefSelect k="retentionKeep" label="N =" options={[1, 2, 3, 5, 10, 20].map((x) => [x, String(x)])} />}</div></section>
       <section class="panel"><h2>Import & export</h2><div class="actions">
         <FileBtn label="Import OPML" accept=".opml,.xml,text/xml,text/x-opml" onText={async (x) => { const r = await api("POST", "/import/opml", x, { type: "text/xml" }); setRes(`Imported ${r.imported}, ${r.already} already subscribed${r.failed.length ? `, ${r.failed.length} failed: ${r.failed.map((f: any) => `${f.title} (${f.reason})`).join("; ")}` : ""}`); }} />
         <button class="btn" onClick={() => download("/export/opml", "patchcast-subscriptions.opml")}>Export OPML</button>
@@ -335,7 +364,7 @@ function Settings() {
           {!d.current && <button class="btn danger" onClick={() => confirm(`Revoke ${d.name}?`) && attempt(() => api("DELETE", `/devices/${d.id}`), "Revoked")}>Revoke</button>}</div>)}</section>
       <Account acc={acc.data} error={acc.error} />
       {m.user.isAdmin && <Users me={m.user.id} users={users.data} error={users.error} />}
-      <section class="panel"><h2>Keyboard</h2><p class="sub">Space/K play · J or ← back 10 s · L or → forward 30 s · ↑↓ volume · N/P next/previous chapter · &lt; &gt; speed · M mute</p></section>
+      <section class="panel"><h2>Keyboard</h2><p class="sub">Space/K play · J or ← back {pr.skipBackSec} s · L or → forward {pr.skipForwardSec} s · ↑↓ volume · N/P next/previous chapter · &lt; &gt; speed · M mute</p></section>
       <div class="actions"><button class="btn" onClick={() => signOut(false)}>Sign out</button>{acc.data?.sessionVia === "oidc" && <button class="btn" onClick={() => signOut(true)}>Sign out of {acc.data.oidc.providerName} too</button>}<span class="sub">{m.user.username} · Patchcast Sync {m.version}</span></div>
     </>
   );
@@ -361,10 +390,10 @@ function SleepMenu() {
     <option value="">Off</option>{p.sleepAt && <option value="on">{Math.max(1, Math.ceil((p.sleepAt - Date.now()) / 60000))} min</option>}{[5, 15, 30, 45, 60].map((m) => <option value={String(m)}>In {m} min</option>)}<option value="end">End of episode</option></select></label>;
 }
 function Controls() {
-  const p = useStore(P.player);
-  return <div class="controls"><Btn n="prev" label="Previous chapter" onClick={P.prevChapter} /><button class="ib txt" title="Back 10 seconds" aria-label="Back 10 seconds" onClick={() => P.skip(-10)}>−10</button>
+  const p = useStore(P.player), pr = useStore(prefs);
+  return <div class="controls"><Btn n="prev" label="Previous chapter" onClick={P.prevChapter} /><button class="ib txt" title={`Back ${pr.skipBackSec} seconds`} aria-label={`Back ${pr.skipBackSec} seconds`} onClick={P.back}>−{pr.skipBackSec}</button>
     <Btn n={p.playing ? "pause" : "play"} label={p.playing ? "Pause" : "Play"} cls={`big ${p.buffering && p.playing ? "wait" : ""}`} onClick={P.toggle} />
-    <button class="ib txt" title="Forward 30 seconds" aria-label="Forward 30 seconds" onClick={() => P.skip(30)}>+30</button><Btn n="next" label="Next chapter" onClick={P.nextChapter} /></div>;
+    <button class="ib txt" title={`Forward ${pr.skipForwardSec} seconds`} aria-label={`Forward ${pr.skipForwardSec} seconds`} onClick={P.fwd}>+{pr.skipForwardSec}</button><Btn n="next" label="Next chapter" onClick={P.nextChapter} /></div>;
 }
 const Speed = () => { const p = useStore(P.player); return <label class="sel" title="Playback speed"><select aria-label="Playback speed" value={String(p.speed)} onChange={(e) => P.setSpeed(Number(e.currentTarget.value))}>{[...new Set([0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3, p.speed])].sort((a, b) => a - b).map((s) => <option value={String(s)}>{s}×</option>)}</select></label>; };
 
@@ -392,7 +421,7 @@ function Banner() {
 }
 
 // ------------------------------------------------------------ sign in
-function signedIn(m: Me) { setCsrf(m.csrf); me.set(m); P.connect(m.deviceId, BASE); }
+function signedIn(m: Me) { setCsrf(m.csrf); me.set(m); P.connect(m.deviceId, BASE); void loadPrefs(); }
 function signedOut() { P.disconnect(); P.audio.pause(); P.remote.set(null); me.set(null); }
 whenUnauthorized(signedOut);
 

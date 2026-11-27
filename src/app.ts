@@ -7,7 +7,7 @@ import { Db, type Row } from "./db.ts";
 import { Auth, AuthError, RateLimiter, SESSION_MS, safeEqual, type Principal } from "./auth.ts";
 import { Events } from "./events.ts";
 import { Feeds } from "./feeds.ts";
-import { SyncStore, SyncError, cleanSettings, stateOut, subOut, type EpisodeChange } from "./sync.ts";
+import { SyncStore, SyncError, cleanSettings, settingOut, stateOut, subOut, type EpisodeChange } from "./sync.ts";
 import { FetchError, Semaphore, safeFetch, safeOpen, USER_AGENT } from "./net.ts";
 import { FeedParseError, httpUrl, stripTags } from "./feed.ts";
 import { feedKey, normalizeFeedUrl } from "./urls.ts";
@@ -374,6 +374,16 @@ export async function buildApp(o: AppOptions) {
         if (!s) return { latest: null };
         const e = db.get(`${EP} WHERE f.key=? AND e.guid=?`, p.userId, s.feed_key, s.guid);
         return { latest: e ? { episode: ep(e), deviceId: s.position_device, deviceName: s.dname, at: s.position_at, mine: s.position_device === p.deviceId } : null };
+      });
+
+      // ---- settings that follow the user (0.10.0)
+      a.get("/api/v1/settings", async (req) => ({ settings: sync.settings(P(req).userId).map(settingOut) }));
+      a.put("/api/v1/settings", async (req) => {
+        const p = P(req), b = (req.body ?? {}) as any;
+        if (typeof b.values !== "object" || !b.values || Array.isArray(b.values)) throw new AuthError(400, "bad_request", "values must be an object of key: value");
+        const changedAt = Date.now();
+        const res = sync.push(p.userId, p.deviceId, { settings: Object.entries(b.values).map(([key, value]) => ({ key, value, changedAt })) });
+        return { rev: res.rev, changed: res.settings, settings: sync.settings(p.userId).map(settingOut) };
       });
 
       // ---- subscriptions

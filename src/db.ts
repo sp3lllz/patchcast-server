@@ -122,6 +122,15 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (issuer, sub), UNIQUE (user_id, issuer)
   );
   `,
+  // 0.10.0: settings that follow the user to every device. value NULL = back to the default (kept as a tombstone so the reset syncs).
+  `
+  CREATE TABLE user_settings (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT,
+    changed_at INTEGER NOT NULL, rev INTEGER NOT NULL, updated_at INTEGER NOT NULL, device_id TEXT,
+    PRIMARY KEY (user_id, key)
+  );
+  CREATE INDEX user_settings_rev ON user_settings(user_id, rev);
+  `,
 ];
 
 function migrate(db: Db) {
