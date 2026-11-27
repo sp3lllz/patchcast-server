@@ -141,7 +141,7 @@ test("database from 0.6.0 is upgraded in place", () => {
   Db.open(dir).close();
   // Turn it back into a version 1 file.
   const raw = new DatabaseSync(path);
-  raw.exec("DROP TABLE meta; DROP TABLE user_settings; DROP TABLE identities; ALTER TABLE users DROP COLUMN display_name; ALTER TABLE users DROP COLUMN pw_recovery_until; ALTER TABLE sessions DROP COLUMN via; ALTER TABLE sessions DROP COLUMN id_token; PRAGMA user_version=1; INSERT INTO users(username,pw_hash,is_admin,created_at) VALUES('patch','h',1,1)");
+  raw.exec("DROP TABLE ratings; DROP TABLE meta; DROP TABLE user_settings; DROP TABLE identities; ALTER TABLE users DROP COLUMN display_name; ALTER TABLE users DROP COLUMN pw_recovery_until; ALTER TABLE sessions DROP COLUMN via; ALTER TABLE sessions DROP COLUMN id_token; PRAGMA user_version=1; INSERT INTO users(username,pw_hash,is_admin,created_at) VALUES('patch','h',1,1)");
   raw.close();
   const db = Db.open(dir);
   assert.equal(db.get("SELECT pw_recovery_until r FROM users WHERE username='patch'")!.r, 0); assert.equal(db.all("SELECT * FROM identities").length, 0);

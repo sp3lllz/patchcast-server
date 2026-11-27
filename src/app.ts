@@ -300,7 +300,7 @@ export async function buildApp(o: AppOptions) {
         return {
           podcasts: rows.map((r) => ({
             id: r.feed_id, feedUrl: r.feed_url, title: r.f_title ?? r.title ?? r.feed_url, author: r.author, image: artUrl(r.image), error: r.error, fetchedAt: r.fetched_at,
-            total: r.total, unplayed: r.total - r.played, settings: JSON.parse(r.settings), addedAt: r.added_at,
+            total: r.total, unplayed: r.total - r.played, settings: JSON.parse(r.settings), addedAt: r.added_at, rating: sync.rating(u, r.feed_key),
             releases: db.all("SELECT pub_date p, type t FROM episodes WHERE feed_id=? AND pub_date IS NOT NULL ORDER BY pub_date DESC LIMIT 40", r.feed_id).map((x) => [x.p, x.t]),
           })).sort((x, y) => x.title.localeCompare(y.title, "en", { sensitivity: "base" })),
         };
@@ -309,7 +309,7 @@ export async function buildApp(o: AppOptions) {
         const u = P(req).userId, f = feedOf(u, num((req.params as any).id));
         return {
           id: f.id, feedUrl: f.url, title: f.title ?? f.s_title ?? f.url, author: f.author, description: notes(f.description), image: artUrl(f.image), link: f.link,
-          error: f.error, fetchedAt: f.fetched_at, subscribed: !f.deleted, settings: JSON.parse(f.settings),
+          error: f.error, fetchedAt: f.fetched_at, subscribed: !f.deleted, settings: JSON.parse(f.settings), rating: sync.rating(u, f.key),
           episodes: db.all(`${EP} WHERE e.feed_id=? ORDER BY e.pub_date DESC, e.id DESC`, u, f.id).map(ep),
         };
       });
@@ -392,6 +392,14 @@ export async function buildApp(o: AppOptions) {
         if (!s) return { latest: null };
         const e = db.get(`${EP} WHERE f.key=? AND e.guid=?`, p.userId, s.feed_key, s.guid);
         return { latest: e ? { episode: ep(e), deviceId: s.position_device, deviceName: s.dname, at: s.position_at, mine: s.position_device === p.deviceId } : null };
+      });
+
+      // Feature 6: personal rating of a podcast (1, -1, 0 = none); kept after unsubscribing.
+      a.put("/api/v1/podcasts/:id/rating", async (req) => {
+        const p = P(req), f = feedOf(p.userId, num((req.params as any).id)), r = (req.body as any)?.rating;
+        if (r !== 1 && r !== -1 && r !== 0) throw new AuthError(400, "bad_request", "rating must be 1, -1 or 0");
+        sync.push(p.userId, p.deviceId, { ratings: [{ feedUrl: f.url, rating: r, changedAt: Date.now() }] });
+        return { rating: sync.rating(p.userId, f.key) };
       });
 
       // ---- settings that follow the user (0.10.0)

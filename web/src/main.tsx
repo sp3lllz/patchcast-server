@@ -108,6 +108,17 @@ function Library() {
   );
 }
 
+/** Feature 6: your own thumbs up / down for a podcast; it stays when you unsubscribe and is there again if you come back. */
+function Rating({ id, value }: { id: number; value: number }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  const set = (r: number) => { const next = v === r ? 0 : r, before = v; setV(next); api("PUT", `/podcasts/${id}/rating`, { rating: next }).catch((e) => { setV(before); say(e.message); }); };
+  return <div class="rating" role="group" aria-label="Your rating">
+    <button class={`btn ${v === 1 ? "on" : ""}`} aria-pressed={v === 1} title="I like this podcast" onClick={() => set(1)}>👍 {v === 1 ? "Liked" : "Like"}</button>
+    <button class={`btn ${v === -1 ? "on" : ""}`} aria-pressed={v === -1} title="Not for me" onClick={() => set(-1)}>👎 {v === -1 ? "Not for me" : "Dislike"}</button>
+  </div>;
+}
+
 function PodcastPage({ id }: { id: number }) {
   const { data: p, error } = useData<Podcast>(`/podcasts/${id}`);
   const [filter, setFilter] = useState("unplayed");
@@ -129,6 +140,7 @@ function PodcastPage({ id }: { id: number }) {
     <>
       <div class="hero"><Art src={p.image} /><div class="grow">
         <h1>{p.title}</h1>{p.author && <div class="sub">{p.author}</div>}
+        <Rating id={id} value={p.rating ?? 0} />
         <div class={`pred ${h.late ? "late" : ""}`}><b>{h.head}</b><span>{h.detail}</span></div>
         <div class="actions">
           {p.subscribed ? <button class="btn" onClick={() => confirm(`Unsubscribe from ${p.title}? It will be removed from your other devices too.`) && attempt(async () => { await api("DELETE", `/subscriptions/${id}`); go("/library"); }, "Unsubscribed")}>Unsubscribe</button>

@@ -86,6 +86,12 @@ Limits: 5000 episodes, 2000 subscriptions, 200 settings (500 stored per user), 8
 | User settings | Per key: newest `changedAt` wins, a tie keeps the stored value (`mode: "force"` wins ties) |
 | Queue | Three-way: the difference between `base` (the list as you last synced it) and `items` is applied to the server's current list, so concurrent adds, removals and moves combine. Items finished elsewhere aren't re-added automatically. Finishing an episode or unsubscribing removes it. Removed items stay as tombstones on the server. Leave items you can't show out of `base`: the server keeps them |
 
+### Ratings (0.10+)
+A personal thumbs up (`1`) / down (`-1`) / none (`0`) per podcast, keyed by feed, so it outlives unsubscribing and is there
+again after resubscribing. Push `ratings: [{feedUrl, rating, changedAt}]`; newest change per feed wins (ties keep the stored one,
+`force` wins ties); any other value refuses the push. Pull returns `ratings: [{feedUrl, rating, changedAt, rev, updatedAt, deviceId}]`
+(not in `feed=` pulls). Web: `rating` in `/library` and `/podcasts/:id`; `PUT /podcasts/:id/rating {rating}`.
+
 ### Nearly finished, abandoned (0.10+)
 An unplayed episode with less than 5 minutes left whose last position (a pause, stop or the last progress while playing) is at least
 10 minutes old is marked played by the server, as a finish (position 0, out of the queue, `completedAt` = that position time + 10 min,

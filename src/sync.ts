@@ -15,11 +15,13 @@ export interface QueueRef extends EpisodeRef { auto?: boolean; addedAt?: number 
 export interface QueuePush { base: EpisodeRef[]; items: QueueRef[]; replace?: boolean }
 /** One user setting (0.10.0). value null = back to the default. */
 export interface SettingChange { key: string; value: unknown; changedAt?: number }
+/** Feature 6: 1 = thumbs up, -1 = thumbs down, 0 = none. */
+export interface RatingChange { feedUrl: string; rating: number; changedAt?: number }
 export interface PushBody {
   pushId?: string; clientTime?: number; mode?: "merge" | "force";
-  subscriptions?: SubscriptionChange[]; episodes?: EpisodeChange[]; queue?: QueuePush | null; settings?: SettingChange[];
+  subscriptions?: SubscriptionChange[]; episodes?: EpisodeChange[]; queue?: QueuePush | null; settings?: SettingChange[]; ratings?: RatingChange[];
 }
-export interface PushResult { rev: number; serverTime: number; subscriptions: number; episodes: number; queue: boolean; settings: number; skipped: number; duplicate?: boolean }
+export interface PushResult { rev: number; serverTime: number; subscriptions: number; episodes: number; queue: boolean; settings: number; ratings: number; skipped: number; duplicate?: boolean }
 
 /** Feature 7 (0.10.0): an episode with less than this left… */
 export const AUTO_FINISH_REMAINING_MS = 5 * 60_000;
@@ -106,8 +108,9 @@ export class SyncStore {
 
   push(userId: number, deviceId: string, body: PushBody): PushResult {
     if (typeof body !== "object" || !body) throw bad("body must be an object");
-    const subs = body.subscriptions ?? [], eps = body.episodes ?? [], sets = body.settings ?? [];
-    if (!Array.isArray(subs) || !Array.isArray(eps) || !Array.isArray(sets)) throw bad("subscriptions, episodes and settings must be arrays");
+    const subs = body.subscriptions ?? [], eps = body.episodes ?? [], sets = body.settings ?? [], rats = body.ratings ?? [];
+    if (!Array.isArray(subs) || !Array.isArray(eps) || !Array.isArray(sets) || !Array.isArray(rats)) throw bad("subscriptions, episodes, settings and ratings must be arrays");
+    if (rats.length > 2000) throw bad("too many ratings in one push (max 2000)");
     if (subs.length > 2000 || eps.length > 5000 || sets.length > 200) throw bad("too many records in one push (max 2000 subscriptions, 5000 episodes, 200 settings)");
     const pushId = optStr(body.pushId, 100);
     const now = this.now();
@@ -131,7 +134,9 @@ export class SyncStore {
       const q = body.queue ? this.applyQueue(userId, deviceId, body.queue, at, now) : false;
       let nSets = 0;
       for (const c of sets) if (this.applySetting(userId, deviceId, c, at, now, force)) nSets++; else skipped++;
-      const res: PushResult = { rev: this.rev(userId), serverTime: now, subscriptions: nSubs, episodes: nEps, queue: q, settings: nSets, skipped };
+      let nRats = 0;
+      for (const r of rats) if (this.applyRating(userId, deviceId, r, at, force)) nRats++; else skipped++;
+      const res: PushResult = { rev: this.rev(userId), serverTime: now, subscriptions: nSubs, episodes: nEps, queue: q, settings: nSets, ratings: nRats, skipped };
       if (pushId) {
         this.db.run("INSERT INTO pushes(user_id,push_id,response,at) VALUES(?,?,?,?)", userId, pushId, JSON.stringify(res), now);
         this.db.run("DELETE FROM pushes WHERE at<?", now - 14 * 86_400_000);
@@ -192,6 +197,26 @@ export class SyncStore {
       ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, changed_at=excluded.changed_at, rev=excluded.rev, updated_at=excluded.updated_at, device_id=excluded.device_id`,
       userId, key, json, t, this.bump(userId), now, deviceId);
     return true;
+  }
+
+  /** Feature 6: newest change per podcast wins (ties keep the stored one unless forced). Kept after unsubscribing. */
+  private applyRating(userId: number, deviceId: string, c: RatingChange, at: (t: unknown) => number, force: boolean): boolean {
+    if (typeof c !== "object" || !c) throw bad("each rating must be an object");
+    const url = normalizeFeedUrl(str(c.feedUrl, MAX_URL, "feedUrl"));
+    if (!url) throw bad("Invalid feed URL");
+    if (c.rating !== 1 && c.rating !== -1 && c.rating !== 0) throw bad("rating must be 1, -1 or 0");
+    const key = feedKey(url), t = at(c.changedAt), now = this.now();
+    const cur = this.db.get("SELECT rating, changed_at FROM ratings WHERE user_id=? AND feed_key=?", userId, key);
+    if (cur && (force ? t < cur.changed_at : t <= cur.changed_at)) return false;
+    if (cur && cur.rating === c.rating) { this.db.run("UPDATE ratings SET changed_at=? WHERE user_id=? AND feed_key=?", t, userId, key); return false; }
+    this.db.run(`INSERT INTO ratings(user_id,feed_key,feed_url,rating,changed_at,rev,updated_at,device_id) VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(user_id,feed_key) DO UPDATE SET rating=excluded.rating, changed_at=excluded.changed_at, rev=excluded.rev, updated_at=excluded.updated_at, device_id=excluded.device_id`,
+      userId, key, url, c.rating, t, this.bump(userId), now, deviceId);
+    return true;
+  }
+
+  rating(userId: number, key: string): number {
+    return (this.db.get("SELECT rating FROM ratings WHERE user_id=? AND feed_key=?", userId, key) as Row | undefined)?.rating ?? 0;
   }
 
   /** Every stored setting of a user (resets included, as null). */
@@ -376,7 +401,8 @@ export class SyncStore {
       ...[userId, since, ...(key ? [key] : []), limit + 1]);
     // Settings aren't per podcast: a feed= pull leaves them out.
     const sets = key ? [] : this.db.all("SELECT * FROM user_settings WHERE user_id=? AND rev>? ORDER BY rev LIMIT ?", userId, since, limit + 1);
-    const all = [...subs, ...eps, ...sets].sort((a, b) => a.rev - b.rev);
+    const rats = key ? [] : this.db.all("SELECT * FROM ratings WHERE user_id=? AND rev>? ORDER BY rev LIMIT ?", userId, since, limit + 1);
+    const all = [...subs, ...eps, ...sets, ...rats].sort((a, b) => a.rev - b.rev);
     const hasMore = all.length > limit;
     const upto = hasMore ? all[limit - 1].rev : current;
     const queueRev = (this.db.get("SELECT MAX(rev) r FROM queue_items WHERE user_id=?", userId) as Row).r ?? 0;
@@ -385,6 +411,7 @@ export class SyncStore {
       subscriptions: subs.filter((s) => s.rev <= upto).map(subOut),
       episodes: eps.filter((e) => e.rev <= upto).map(stateOut),
       settings: sets.filter((x) => x.rev <= upto).map(settingOut),
+      ratings: rats.filter((x) => x.rev <= upto).map((r) => ({ feedUrl: r.feed_url, rating: r.rating, changedAt: r.changed_at, rev: r.rev, updatedAt: r.updated_at, deviceId: r.device_id })),
       // The whole ordered queue whenever any part of it changed (it is small); tombstones stay on the server.
       queue: !hasMore && !key && queueRev > since ? this.queue(userId).map((q) => ({
         feedUrl: q.feed_url, guid: q.guid, enclosureUrl: q.enclosure_url, title: q.title, auto: !!q.auto, addedAt: q.added_at })) : null,
