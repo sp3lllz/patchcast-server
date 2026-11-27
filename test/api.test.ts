@@ -245,6 +245,24 @@ describe("library with a real HTTP feed host", () => {
     assert.equal(eps.length, 3); assert.equal(eps.find((e: any) => e.guid === "e1").played, true);
   });
 
+  test("play history (0.10.0): most recently played first, queued episodes left out, other devices' plays included", async () => {
+    const s = await sub();
+    const d = await new Device(ctx).login("Phone");
+    const eps = (await b.req("GET", `/api/v1/podcasts/${s.json.id}`)).json.episodes;
+    const id = (g: string) => eps.find((e: any) => e.guid === g).id;
+    assert.deepEqual((await b.req("GET", "/api/v1/history")).json.episodes, []);
+    const feed = `${host.url}/feed`, t = Date.now();
+    await d.push({ clientTime: t, episodes: [{ feedUrl: feed, guid: "e1", positionMs: 60_000, positionChangedAt: t - 5000, lastPlayedAt: t - 5000 },
+      { feedUrl: feed, guid: "e2", played: true, playedChangedAt: t - 1000, positionMs: 1000, positionChangedAt: t - 2000, lastPlayedAt: t - 1000 }] });
+    let h = (await b.req("GET", "/api/v1/history")).json.episodes;
+    assert.deepEqual(h.map((e: any) => e.guid), ["e2", "e1"]);
+    assert.equal(h[1].positionMs, 60_000);
+    await b.req("PUT", "/api/v1/queue", { base: [], items: [id("e1")] });
+    h = (await b.req("GET", "/api/v1/history?limit=1")).json.episodes;
+    assert.deepEqual(h.map((e: any) => e.guid), ["e2"]);
+    assert.equal((await b.req("GET", "/api/v1/history?limit=0")).status, 200);
+  });
+
   test("web actions reach devices: played, progress, queue, unsubscribe", async () => {
     const s = await sub();
     const d = await new Device(ctx).login("Phone");

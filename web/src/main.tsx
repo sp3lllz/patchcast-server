@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError, BASE, setCsrf, whenUnauthorized, type Chapter, type Episode, type Podcast } from "./api.ts";
 import { ago, dataVersion, day, dur, fmt, say, Store, toast, useStore } from "./store.ts";
 import * as P from "./player.ts";
+import { prefs, loadPrefs, setPref, type Prefs } from "./settings.ts";
 import { header, predict, short } from "./predict.ts";
 
 // ------------------------------------------------------------ routing
@@ -15,9 +16,9 @@ function A({ to, children, ...p }: { to: string; children: ComponentChildren; cl
 const expanded = new Store(false);
 interface Me { user: { id: number; username: string; isAdmin: boolean }; deviceId: string; csrf: string; version: string }
 const me = new Store<Me | null | undefined>(undefined);
-const theme = new Store(localStorage.getItem("theme") ?? "system");
-const applyTheme = () => { document.documentElement.dataset.theme = theme.value; localStorage.setItem("theme", theme.value); };
-theme.sub(applyTheme); applyTheme();
+// Appearance is a synced setting (0.10.0): the same theme on every device.
+const applyTheme = () => { const t = prefs.value.themeMode.toLowerCase(); document.documentElement.dataset.theme = t; localStorage.setItem("theme", t); };
+prefs.sub(applyTheme); applyTheme();
 
 // ------------------------------------------------------------ icons
 const I: Record<string, string> = {
@@ -107,6 +108,17 @@ function Library() {
   );
 }
 
+/** Feature 6: your own thumbs up / down for a podcast; it stays when you unsubscribe and is there again if you come back. */
+function Rating({ id, value }: { id: number; value: number }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  const set = (r: number) => { const next = v === r ? 0 : r, before = v; setV(next); api("PUT", `/podcasts/${id}/rating`, { rating: next }).catch((e) => { setV(before); say(e.message); }); };
+  return <div class="rating" role="group" aria-label="Your rating">
+    <button class={`btn ${v === 1 ? "on" : ""}`} aria-pressed={v === 1} title="I like this podcast" onClick={() => set(1)}>👍 {v === 1 ? "Liked" : "Like"}</button>
+    <button class={`btn ${v === -1 ? "on" : ""}`} aria-pressed={v === -1} title="Not for me" onClick={() => set(-1)}>👎 {v === -1 ? "Not for me" : "Dislike"}</button>
+  </div>;
+}
+
 function PodcastPage({ id }: { id: number }) {
   const { data: p, error } = useData<Podcast>(`/podcasts/${id}`);
   const [filter, setFilter] = useState("unplayed");
@@ -128,6 +140,7 @@ function PodcastPage({ id }: { id: number }) {
     <>
       <div class="hero"><Art src={p.image} /><div class="grow">
         <h1>{p.title}</h1>{p.author && <div class="sub">{p.author}</div>}
+        <Rating id={id} value={p.rating ?? 0} />
         <div class={`pred ${h.late ? "late" : ""}`}><b>{h.head}</b><span>{h.detail}</span></div>
         <div class="actions">
           {p.subscribed ? <button class="btn" onClick={() => confirm(`Unsubscribe from ${p.title}? It will be removed from your other devices too.`) && attempt(async () => { await api("DELETE", `/subscriptions/${id}`); go("/library"); }, "Unsubscribed")}>Unsubscribe</button>
@@ -226,6 +239,21 @@ function EpisodePage({ id }: { id: number }) {
   );
 }
 
+/** 0.10.0: what was played before sits above Up Next (oldest at the top); the page opens at Up Next, scroll up for history. */
+function History() {
+  const { data } = useData<{ episodes: Episode[] }>("/history?limit=50");
+  const top = useRef<HTMLHeadingElement>(null);
+  const scrolled = useRef(false);
+  useLayoutEffect(() => {
+    if (!data || scrolled.current) return;
+    scrolled.current = true;
+    if (data.episodes.length) document.getElementById("upnext")?.scrollIntoView({ block: "start" });
+  }, [data]);
+  if (!data?.episodes.length) return null;
+  return <section class="history" aria-label="Recently played"><h2 ref={top}>Recently played</h2>
+    {[...data.episodes].reverse().map((e) => <Row e={e} key={`h${e.id}`} />)}</section>;
+}
+
 function Queue() {
   const { data, error } = useData<{ items: Episode[]; hidden: number }>("/queue");
   const [items, setItems] = useState<Episode[]>([]);
@@ -255,7 +283,8 @@ function Queue() {
   const nudge = (i: number, d: number) => { const n = [...items]; const j = i + d; if (j < 0 || j >= n.length) return; [n[i], n[j]] = [n[j], n[i]]; n[j] = { ...n[j], auto: false }; commit(n); };
   return (
     <>
-      <div class="head"><h1>Up Next</h1>{items.length > 0 && <button class="btn" onClick={() => confirm("Clear Up Next on all devices?") && commit([])}>Clear</button>}</div><Err m={error} />
+      <History />
+      <div class="head" id="upnext"><h1>Up Next</h1>{items.length > 0 && <button class="btn" onClick={() => confirm("Clear Up Next on all devices?") && commit([])}>Clear</button>}</div><Err m={error} />
       <div ref={box}>{items.map((e, i) => <div key={e.id} class={drag === e.id ? "dragging" : ""}><Row e={e} remove={() => commit(items.filter((x) => x.id !== e.id))}
         handle={<button class="ib handle" aria-label={`Reorder ${e.title} (drag, or arrow keys)`} title="Drag to reorder" onPointerDown={(x) => start(x as any, e.id)} onKeyDown={(k) => { if (k.key === "ArrowUp" || k.key === "ArrowDown") { k.preventDefault(); k.stopPropagation(); nudge(i, k.key === "ArrowUp" ? -1 : 1); } }}><Icon n="drag" /></button>} /></div>)}</div>
       {data && !items.length && <Empty>Up Next is empty. Use the queue button on any episode.</Empty>}
@@ -299,7 +328,33 @@ function Account({ acc, error }: { acc: any; error: string | null }) {
   return <section class="panel"><h2>Account</h2>
     <div class="line"><div class="grow"><b>{acc.displayName ?? acc.username}</b>{acc.isAdmin && <i class="chip">Admin</i>}
       <div class="sub">{acc.username} · signs in with {name}{i && [i.username, i.email].some(Boolean) ? ` as ${[i.username, i.email].filter(Boolean).join(" · ")}` : ""}{i?.lastLoginAt ? ` · last sign-in ${ago(i.lastLoginAt)}` : ""}</div></div></div>
-    <p class="sub">Your name, email, passkeys and sign-in methods are managed in {name}.</p></section>;
+    <p class="sub">Your name, email, passkeys and sign-in methods are managed in {name}.</p>
+    <DeleteAccount username={acc.username} provider={name} /></section>;
+}
+
+/** Feature 8: delete this account and everything the server keeps for it. */
+function DeleteAccount({ username, provider }: { username: string; provider: string }) {
+  const [open, setOpen] = useState(false), [typed, setTyped] = useState(""), [busy, setBusy] = useState(false), [err, setErr] = useState<string | null>(null);
+  const del = async () => {
+    setBusy(true); setErr(null);
+    try { await api("DELETE", "/me", { confirm: typed }); P.audio.pause(); signedOut(); say("Your account and its data were deleted"); }
+    catch (e: any) {
+      if (e instanceof ApiError && e.code === "reauth_required") { location.href = `${BASE}/auth/oidc/login?returnTo=${encodeURIComponent("/settings")}`; return; }
+      setErr(e.message);
+    } finally { setBusy(false); }
+  };
+  if (!open) return <div class="actions"><button class="btn danger" onClick={() => setOpen(true)}>Delete my account…</button></div>;
+  return <div class="danger-zone" role="group" aria-label="Delete my account">
+    <h3>Delete my account</h3>
+    <p>This permanently erases everything this server keeps for <b>{username}</b>: subscriptions, playback positions and history, Up Next,
+      settings, ratings, all your devices and every signed-in session, and the link to your {provider} sign-in. Your {provider} account itself
+      is not touched. Episodes downloaded in the apps stay on those devices. This can't be undone.</p>
+    <label class="check">Type your user name to confirm <input value={typed} onInput={(e) => setTyped(e.currentTarget.value)} autoComplete="off" aria-label="Your user name" /></label>
+    <Err m={err} />
+    <div class="actions"><button class="btn danger" disabled={busy || typed.trim().toLowerCase() !== username.toLowerCase()} onClick={del}>Delete everything</button>
+      <button class="btn" onClick={() => { setOpen(false); setTyped(""); setErr(null); }}>Cancel</button></div>
+    <p class="sub">For your safety the server asks you to sign in again if you signed in more than 15 minutes ago.</p>
+  </div>;
 }
 
 function Users({ me: self, users, error }: { me: number; users: any; error: string | null }) {
@@ -313,8 +368,22 @@ function Users({ me: self, users, error }: { me: number; users: any; error: stri
       {u.id !== self && <button class="btn danger" onClick={() => confirm(`Delete ${u.username} and all their data?`) && attempt(() => api("DELETE", `/users/${u.id}`), "Deleted")}>Delete</button>}</div>)}</section>;
 }
 
+/** A labelled select bound to one synced setting. */
+function PrefSelect<K extends keyof Prefs>({ k, label, options, unit = "" }: { k: K; label: string; options: [Prefs[K], string][]; unit?: string }) {
+  const v = useStore(prefs)[k];
+  // A value chosen in another app (e.g. 1.3×) stays listed and selected.
+  const list = options.some(([x]) => x === v) ? options : [...options, [v, `${v}${unit}`] as [Prefs[K], string]].sort((a, b) => (typeof a[0] === "number" && typeof b[0] === "number" ? a[0] - b[0] : 0));
+  return <label class="check">{label} <select value={String(v)} onChange={(e) => { const o = list.find(([x]) => String(x) === e.currentTarget.value); if (o) void setPref(k, o[0]); }}>
+    {list.map(([x, t]) => <option value={String(x)}>{t}</option>)}</select></label>;
+}
+function PrefToggle({ k, label }: { k: "autoQueueEnabled" | "autoDownloadEnabled" | "shuffleWhenQueueEnds" | "downloadWhileStreaming"; label: string }) {
+  const v = useStore(prefs)[k];
+  return <label class="check"><input type="checkbox" checked={v} onChange={(e) => void setPref(k, e.currentTarget.checked)} /> {label}</label>;
+}
+const secs = (xs: number[]) => xs.map((x) => [x, `${x} s`] as [number, string]);
+
 function Settings() {
-  const m = useStore(me)!, t = useStore(theme);
+  const m = useStore(me)!, pr = useStore(prefs);
   const dev = useData<{ devices: any[] }>("/devices");
   const users = useData<any>(m.user.isAdmin ? "/users" : null);
   const acc = useData<any>("/me/account");
@@ -323,7 +392,24 @@ function Settings() {
   return (
     <>
       <h1>Settings</h1>
-      <section class="panel"><h2>Appearance</h2><div class="tabs">{["system", "light", "dark"].map((x) => <button class={t === x ? "on" : ""} onClick={() => theme.set(x)}>{x[0].toUpperCase() + x.slice(1)}</button>)}</div></section>
+      <p class="sub">Playback, new-episode, download and appearance settings are the same on all your devices: a change here reaches your phone, tablet and Mac. Wi-Fi only, battery and storage options stay on each device, and downloaded files are never synced.</p>
+      <section class="panel"><h2>Appearance</h2><div class="tabs" role="group" aria-label="Theme">{(["SYSTEM", "LIGHT", "DARK"] as const).map((x) => <button class={pr.themeMode === x ? "on" : ""} aria-pressed={pr.themeMode === x} onClick={() => void setPref("themeMode", x)}>{x[0] + x.slice(1).toLowerCase()}</button>)}</div></section>
+      <section class="panel"><h2>Playback</h2><div class="actions">
+        <PrefSelect k="defaultSpeed" label="Default speed" unit="×" options={[0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3].map((x) => [x, `${x}×`])} />
+        <PrefSelect k="skipBackSec" label="Skip back" unit=" s" options={secs([5, 10, 15, 20, 30, 45, 60])} />
+        <PrefSelect k="skipForwardSec" label="Skip forward" unit=" s" options={secs([10, 15, 20, 30, 45, 60, 90, 120])} /></div>
+        <p class="sub">A podcast's own speed (on its page) wins over the default.</p>
+        <div class="actions"><PrefToggle k="shuffleWhenQueueEnds" label="When Up Next ends, shuffle episodes from your podcasts" /></div>
+        <p class="sub">Plays random episodes from the podcasts you follow, favouring ones you haven't listened to in the last 30 days.</p></section>
+      <section class="panel"><h2>New episodes</h2><div class="actions">
+        <PrefToggle k="autoQueueEnabled" label="Add new episodes to Up Next" />
+        <PrefSelect k="autoQueuePosition" label="Add them at the" options={[["FRONT", "front"], ["BACK", "back"]]} />
+        <PrefSelect k="newEpisodeTimeoutDays" label="Remove unplayed new episodes after" unit=" days" options={[[1, "1 day"], [3, "3 days"], [7, "7 days"], [14, "14 days"], [30, "30 days"], [0, "never"]]} /></div></section>
+      <section class="panel"><h2>Downloads in the apps</h2><p class="sub">The browser streams; these rules tell each phone, tablet and Mac what to download for itself.</p><div class="actions">
+        <PrefToggle k="autoDownloadEnabled" label="Download new episodes automatically" />
+        <PrefToggle k="downloadWhileStreaming" label="Download while streaming (keeps playing if the connection drops)" />
+        <PrefSelect k="retentionMode" label="Keep" options={[["KEEP_ALL", "all downloads"], ["KEEP_LATEST", "the latest N per podcast"], ["DELETE_PLAYED", "until played"]]} />
+        {pr.retentionMode === "KEEP_LATEST" && <PrefSelect k="retentionKeep" label="N =" options={[1, 2, 3, 5, 10, 20].map((x) => [x, String(x)])} />}</div></section>
       <section class="panel"><h2>Import & export</h2><div class="actions">
         <FileBtn label="Import OPML" accept=".opml,.xml,text/xml,text/x-opml" onText={async (x) => { const r = await api("POST", "/import/opml", x, { type: "text/xml" }); setRes(`Imported ${r.imported}, ${r.already} already subscribed${r.failed.length ? `, ${r.failed.length} failed: ${r.failed.map((f: any) => `${f.title} (${f.reason})`).join("; ")}` : ""}`); }} />
         <button class="btn" onClick={() => download("/export/opml", "patchcast-subscriptions.opml")}>Export OPML</button>
@@ -335,7 +421,7 @@ function Settings() {
           {!d.current && <button class="btn danger" onClick={() => confirm(`Revoke ${d.name}?`) && attempt(() => api("DELETE", `/devices/${d.id}`), "Revoked")}>Revoke</button>}</div>)}</section>
       <Account acc={acc.data} error={acc.error} />
       {m.user.isAdmin && <Users me={m.user.id} users={users.data} error={users.error} />}
-      <section class="panel"><h2>Keyboard</h2><p class="sub">Space/K play · J or ← back 10 s · L or → forward 30 s · ↑↓ volume · N/P next/previous chapter · &lt; &gt; speed · M mute</p></section>
+      <section class="panel"><h2>Keyboard</h2><p class="sub">Space/K play · J or ← back {pr.skipBackSec} s · L or → forward {pr.skipForwardSec} s · ↑↓ volume · N/P next/previous chapter · &lt; &gt; speed · M mute</p></section>
       <div class="actions"><button class="btn" onClick={() => signOut(false)}>Sign out</button>{acc.data?.sessionVia === "oidc" && <button class="btn" onClick={() => signOut(true)}>Sign out of {acc.data.oidc.providerName} too</button>}<span class="sub">{m.user.username} · Patchcast Sync {m.version}</span></div>
     </>
   );
@@ -361,28 +447,39 @@ function SleepMenu() {
     <option value="">Off</option>{p.sleepAt && <option value="on">{Math.max(1, Math.ceil((p.sleepAt - Date.now()) / 60000))} min</option>}{[5, 15, 30, 45, 60].map((m) => <option value={String(m)}>In {m} min</option>)}<option value="end">End of episode</option></select></label>;
 }
 function Controls() {
-  const p = useStore(P.player);
-  return <div class="controls"><Btn n="prev" label="Previous chapter" onClick={P.prevChapter} /><button class="ib txt" title="Back 10 seconds" aria-label="Back 10 seconds" onClick={() => P.skip(-10)}>−10</button>
+  const p = useStore(P.player), pr = useStore(prefs);
+  return <div class="controls"><Btn n="prev" label="Previous chapter" onClick={P.prevChapter} /><button class="ib txt" title={`Back ${pr.skipBackSec} seconds`} aria-label={`Back ${pr.skipBackSec} seconds`} onClick={P.back}>−{pr.skipBackSec}</button>
     <Btn n={p.playing ? "pause" : "play"} label={p.playing ? "Pause" : "Play"} cls={`big ${p.buffering && p.playing ? "wait" : ""}`} onClick={P.toggle} />
-    <button class="ib txt" title="Forward 30 seconds" aria-label="Forward 30 seconds" onClick={() => P.skip(30)}>+30</button><Btn n="next" label="Next chapter" onClick={P.nextChapter} /></div>;
+    <button class="ib txt" title={`Forward ${pr.skipForwardSec} seconds`} aria-label={`Forward ${pr.skipForwardSec} seconds`} onClick={P.fwd}>+{pr.skipForwardSec}</button><Btn n="next" label="Next chapter" onClick={P.nextChapter} /></div>;
 }
 const Speed = () => { const p = useStore(P.player); return <label class="sel" title="Playback speed"><select aria-label="Playback speed" value={String(p.speed)} onChange={(e) => P.setSpeed(Number(e.currentTarget.value))}>{[...new Set([0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3, p.speed])].sort((a, b) => a - b).map((s) => <option value={String(s)}>{s}×</option>)}</select></label>; };
 
+/** 0.10.0: Show notes and Chapters sit in the same bar as Speed and Sleep; one panel is shown at a time. */
+const panel = new Store<"notes" | "chapters" | null>(null);
 function PlayerBar() {
-  const p = useStore(P.player), open = useStore(expanded);
+  const p = useStore(P.player), open = useStore(expanded), pick = useStore(panel);
   if (!p.ep) return null;
   const c = P.chapterAt(p.chapters, p.position), art = c?.image ?? p.art;
+  const nChapters = p.chapters.filter((x) => !x.hidden).length;
+  const shown = pick === "chapters" && nChapters ? "chapters" : pick === "notes" || !nChapters ? "notes" : "chapters";
+  const show = (x: "notes" | "chapters") => { panel.set(x); requestAnimationFrame(() => document.getElementById("now-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })); };
   return (
     <>
       {open && <div class="now" role="dialog" aria-label="Now playing"><div class="inner">
         <div class="head"><Btn n="down" label="Close player" onClick={() => expanded.set(false)} /><span class="grow" /><A to={`/episode/${p.ep.id}`} class="btn">Episode page</A></div>
-        <div class="cols"><div class="left"><Art src={art} cls="huge" /><h2>{p.ep.title}</h2><div class="sub">{p.ep.podcast}</div>{c && !c.hidden && <div class="chapter">{c.title}</div>}<Seek /><Controls /><div class="extras"><Speed /><SleepMenu /><Volume /></div>{p.via === "proxy" && <div class="sub">Streaming through your server</div>}<Err m={p.error} /></div>
-          <div class="right">{p.chapters.some((x) => !x.hidden) && <><h3>Chapters ({p.chapters.filter((x) => !x.hidden).length})</h3><ChapterList chapters={p.chapters} position={p.position} onPick={P.seek} /></>}<h3>Show notes</h3><Notes html={p.ep.notes ?? ""} duration={p.duration} onSeek={P.seek} /></div></div></div></div>}
+        <div class="cols"><div class="left"><Art src={art} cls="huge" /><h2>{p.ep.title}</h2><div class="sub">{p.ep.podcast}</div>{c && !c.hidden && <div class="chapter">{c.title}</div>}<Seek /><Controls />
+          <div class="extras toolbar"><Speed /><SleepMenu />
+            <button class={`btn ${shown === "notes" ? "on" : ""}`} aria-pressed={shown === "notes"} aria-controls="now-panel" aria-label="Show notes" onClick={() => show("notes")}>Notes</button>
+            {nChapters > 0 && <button class={`btn ${shown === "chapters" ? "on" : ""}`} aria-pressed={shown === "chapters"} aria-controls="now-panel" aria-label={`Chapters, ${nChapters}`} onClick={() => show("chapters")}>Chapters {nChapters}</button>}
+            </div><div class="extras"><Volume /></div>{p.via === "proxy" && <div class="sub">Streaming through your server</div>}<Err m={p.error} /></div>
+          <div class="right" id="now-panel">{shown === "chapters" ? <><h3>Chapters ({nChapters})</h3><ChapterList chapters={p.chapters} position={p.position} onPick={P.seek} /></>
+            : <><h3>Show notes</h3><Notes html={p.ep.notes ?? ""} duration={p.duration} onSeek={P.seek} /></>}</div></div></div></div>}
       <div class="player"><div class="info" onClick={() => expanded.set(!open)} role="button" tabIndex={0} aria-label="Open player" onKeyDown={(e) => e.key === "Enter" && expanded.set(!open)}><Art src={art} /><div class="grow"><b>{p.ep.title}</b><span class="sub">{p.error ?? (c && !c.hidden ? c.title : p.ep.podcast)}</span></div></div>
         <div class="mid"><Controls /><Seek /></div><div class="extras"><Speed /><SleepMenu /><Volume /></div></div>
     </>
   );
 }
+
 const Volume = () => { const p = useStore(P.player); return <label class="vol" title="Volume"><Icon n="vol" /><input type="range" aria-label="Volume" min={0} max={1} step={0.01} value={p.volume} onInput={(e) => P.setVolume(Number(e.currentTarget.value))} /></label>; };
 
 function Banner() {
@@ -392,7 +489,7 @@ function Banner() {
 }
 
 // ------------------------------------------------------------ sign in
-function signedIn(m: Me) { setCsrf(m.csrf); me.set(m); P.connect(m.deviceId, BASE); }
+function signedIn(m: Me) { setCsrf(m.csrf); me.set(m); P.connect(m.deviceId, BASE); void loadPrefs(); }
 function signedOut() { P.disconnect(); P.audio.pause(); P.remote.set(null); me.set(null); }
 whenUnauthorized(signedOut);
 

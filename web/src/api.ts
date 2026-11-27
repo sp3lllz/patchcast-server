@@ -29,5 +29,5 @@ export interface Episode {
 export interface Chapter { startMs: number; title: string; image?: string | null; url?: string | null; hidden?: boolean }
 export interface Podcast {
   id: number; feedUrl: string; title: string; author: string | null; image: string | null; error: string | null; total: number; unplayed: number;
-  settings: { speed?: number | null; priority?: number; exclude?: boolean; autoQueue?: boolean | null }; releases: [number, string | null][]; description?: string; episodes?: Episode[]; subscribed?: boolean; link?: string | null;
+  settings: { speed?: number | null; priority?: number; exclude?: boolean; autoQueue?: boolean | null }; releases: [number, string | null][]; rating?: number; description?: string; episodes?: Episode[]; subscribed?: boolean; link?: string | null;
 }

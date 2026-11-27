@@ -1,5 +1,6 @@
 import { api, ApiError, type Chapter, type Episode, type Podcast } from "./api.ts";
 import { Store, dataVersion, fmt, say } from "./store.ts";
+import { prefs } from "./settings.ts";
 
 export interface PlayerState {
   ep: Episode | null; chapters: Chapter[]; art: string | null; playing: boolean; buffering: boolean; position: number; duration: number; speed: number; volume: number;
@@ -58,7 +59,7 @@ export async function play(id: number, atMs?: number) {
     const ep = await api<Episode>("GET", `/episodes/${id}`);
     const pos = atMs ?? (ep.durationMs && ep.positionMs > ep.durationMs - 5000 ? 0 : ep.positionMs);
     const saved = await api<Podcast>("GET", `/podcasts/${ep.feedId}`).catch(() => null);
-    load(ep, pos, saved?.settings.speed ?? 1);
+    load(ep, pos, saved?.settings.speed ?? prefs.value.defaultSpeed);
     if (remote.value?.ep.id === id) remote.set(null);
     await start();
     void removeFromQueue(id);
@@ -80,7 +81,7 @@ async function start() {
   try { await audio.play(); } catch (e: any) { if (e.name === "NotAllowedError") say("Press play to start"); }
 }
 /** Loads without playing, e.g. to show the last episode after a reload. */
-export function preload(ep: Episode) { if (!player.value.ep) { load(ep, ep.positionMs, 1); player.patch({ buffering: false }); audio.preload = "metadata"; } }
+export function preload(ep: Episode) { if (!player.value.ep) { load(ep, ep.positionMs, prefs.value.defaultSpeed); player.patch({ buffering: false }); audio.preload = "metadata"; } }
 
 audio.addEventListener("loadedmetadata", () => {
   audio.playbackRate = player.value.speed; audio.volume = player.value.volume;
@@ -124,6 +125,11 @@ audio.addEventListener("ended", async () => {
     const q = await api<{ items: Episode[] }>("GET", "/queue");
     const next = q.items.find((e) => e.id !== ep?.id);
     if (next) await play(next.id);
+    else if (prefs.value.shuffleWhenQueueEnds) {
+      // Feature 2: Up Next ran out: a random episode of a subscribed podcast, favouring ones not heard lately.
+      const r = await api<{ episode: Episode | null }>("GET", `/shuffle?exclude=${ep?.id ?? 0}`);
+      if (r.episode) { say(`Shuffle: ${r.episode.title}`); await play(r.episode.id); }
+    }
   } catch {}
 });
 // A tab closing while playing keeps its last position.
@@ -162,6 +168,9 @@ export function seek(ms: number) {
   push();
 }
 export const skip = (sec: number) => seek(audio.currentTime * 1000 + sec * 1000);
+/** Skip lengths are synced settings (0.10.0). */
+export const back = () => skip(-prefs.value.skipBackSec);
+export const fwd = () => skip(prefs.value.skipForwardSec);
 export function nextChapter() {
   const { chapters, position, ep } = player.value;
   const n = chapters.find((c) => !c.hidden && c.startMs > position + 500);
@@ -169,7 +178,12 @@ export function nextChapter() {
   void (async () => {
     const q = await api<{ items: Episode[] }>("GET", "/queue");
     const next = q.items.find((e) => e.id !== ep?.id);
-    if (next) await play(next.id); else say("Up Next is empty");
+    if (next) await play(next.id);
+    else if (prefs.value.shuffleWhenQueueEnds) {
+      // Feature 2: Up Next ran out: a random episode of a subscribed podcast, favouring ones not heard lately.
+      const r = await api<{ episode: Episode | null }>("GET", `/shuffle?exclude=${ep?.id ?? 0}`);
+      if (r.episode) { say(`Shuffle: ${r.episode.title}`); await play(r.episode.id); }
+    } else say("Up Next is empty");
   })().catch((e) => say(e.message));
 }
 export function prevChapter() {
@@ -197,7 +211,7 @@ function setMeta() {
 if ("mediaSession" in navigator) {
   const on = (a: MediaSessionAction, f: MediaSessionActionHandler) => { try { navigator.mediaSession.setActionHandler(a, f); } catch {} };
   on("play", () => void start()); on("pause", () => audio.pause());
-  on("seekbackward", (d) => skip(-(d.seekOffset ?? 10))); on("seekforward", (d) => skip(d.seekOffset ?? 30));
+  on("seekbackward", (d) => skip(-(d.seekOffset ?? prefs.value.skipBackSec))); on("seekforward", (d) => skip(d.seekOffset ?? prefs.value.skipForwardSec));
   on("seekto", (d) => { if (d.seekTime != null) seek(d.seekTime * 1000); });
   on("previoustrack", prevChapter); on("nexttrack", nextChapter);
 }
@@ -205,7 +219,7 @@ export function keys(e: KeyboardEvent) {
   const t = e.target as HTMLElement;
   if (e.ctrlKey || e.metaKey || e.altKey || t.closest("input:not([type=range]),textarea,select,[contenteditable]")) return;
   const map: Record<string, () => void> = {
-    " ": toggle, k: toggle, j: () => skip(-10), l: () => skip(30), ArrowLeft: () => skip(-10), ArrowRight: () => skip(30),
+    " ": toggle, k: toggle, j: back, l: fwd, ArrowLeft: back, ArrowRight: fwd,
     ArrowUp: () => setVolume(Math.min(1, player.value.volume + 0.05)), ArrowDown: () => setVolume(Math.max(0, player.value.volume - 0.05)),
     n: nextChapter, p: prevChapter, m: () => setVolume(player.value.volume ? 0 : 1),
     ">": () => setSpeed(Math.min(3, +(player.value.speed + 0.1).toFixed(2))), "<": () => setSpeed(Math.max(0.5, +(player.value.speed - 0.1).toFixed(2))),

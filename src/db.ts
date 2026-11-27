@@ -122,6 +122,30 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (issuer, sub), UNIQUE (user_id, issuer)
   );
   `,
+  // 0.10.0: settings that follow the user to every device. value NULL = back to the default (kept as a tombstone so the reset syncs).
+  `
+  CREATE TABLE user_settings (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT,
+    changed_at INTEGER NOT NULL, rev INTEGER NOT NULL, updated_at INTEGER NOT NULL, device_id TEXT,
+    PRIMARY KEY (user_id, key)
+  );
+  CREATE INDEX user_settings_rev ON user_settings(user_id, rev);
+  `,
+  // 0.10.0 (feature 7): server facts. auto_finish_since = when this server started marking nearly-finished, abandoned episodes
+  // as played; only pauses after that count, so old half-listened episodes aren't all marked at once.
+  `
+  CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  INSERT INTO meta(key, value) VALUES ('auto_finish_since', CAST(CAST(strftime('%s','now') AS INTEGER) * 1000 AS TEXT));
+  `,
+  // 0.10.0 (feature 6): a personal thumbs up/down per podcast, keyed by feed so it outlives the subscription. 0 = no rating.
+  `
+  CREATE TABLE ratings (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, feed_key TEXT NOT NULL, feed_url TEXT NOT NULL,
+    rating INTEGER NOT NULL, changed_at INTEGER NOT NULL, rev INTEGER NOT NULL, updated_at INTEGER NOT NULL, device_id TEXT,
+    PRIMARY KEY (user_id, feed_key)
+  );
+  CREATE INDEX ratings_rev ON ratings(user_id, rev);
+  `,
 ];
 
 function migrate(db: Db) {

@@ -7,7 +7,7 @@ import { Db, type Row } from "./db.ts";
 import { Auth, AuthError, RateLimiter, SESSION_MS, safeEqual, type Principal } from "./auth.ts";
 import { Events } from "./events.ts";
 import { Feeds } from "./feeds.ts";
-import { SyncStore, SyncError, cleanSettings, stateOut, subOut, type EpisodeChange } from "./sync.ts";
+import { SyncStore, SyncError, cleanSettings, settingOut, stateOut, subOut, pickShuffle, type EpisodeChange } from "./sync.ts";
 import { FetchError, Semaphore, safeFetch, safeOpen, USER_AGENT } from "./net.ts";
 import { FeedParseError, httpUrl, stripTags } from "./feed.ts";
 import { feedKey, normalizeFeedUrl } from "./urls.ts";
@@ -205,6 +205,26 @@ export async function buildApp(o: AppOptions) {
           endSessionUrl = await oidc.logoutUrl(s.id_token ? auth.unseal(s.id_token) : null, `${config.publicUrl}${base}/`).catch(() => null);
         return { ok: true, endSessionUrl };
       });
+      // Feature 8 (0.10.0): delete my own account and everything stored for it (Apple 5.1.1(v)). The provider's account is never touched.
+      a.delete("/api/v1/me", async (req, reply) => {
+        const p = P(req), b = (req.body ?? {}) as any;
+        if (typeof b.confirm !== "string" || b.confirm.trim().toLowerCase() !== p.username.toLowerCase())
+          throw new AuthError(400, "confirm_required", "Type your user name to confirm");
+        if (p.via === "cookie") {
+          // A browser left signed in must not be enough: a sign-in from the last 15 minutes is required.
+          const s = db.get("SELECT created_at FROM sessions WHERE id_hash=?", p.sessionHash);
+          if (!s || Date.now() - s.created_at > 15 * 60_000) throw new AuthError(403, "reauth_required", "Sign in again, then delete your account within 15 minutes");
+        }
+        if (p.isAdmin) {
+          const admins = (db.get("SELECT COUNT(*) n FROM users WHERE is_admin=1") as any).n, users = (db.get("SELECT COUNT(*) n FROM users") as any).n;
+          if (admins <= 1 && users > 1) throw new AuthError(409, "last_admin", "You are the only administrator: give someone else administrator rights first (OIDC_ADMIN_GROUPS), or delete the other accounts");
+        }
+        db.run("DELETE FROM users WHERE id=?", p.userId); // cascades: devices, sessions, identity link, subscriptions, history, queue, settings, ratings
+        events.drop((c) => c.userId === p.userId);
+        if (p.via === "cookie") setCookie(req, reply, "", 0);
+        req.log.info("an account deleted itself");
+        return { deleted: true };
+      });
       a.get("/api/v1/me/account", { preHandler: cookieOnly }, async (req) => accounts.describe(P(req)));
 
       // ---- devices
@@ -300,7 +320,7 @@ export async function buildApp(o: AppOptions) {
         return {
           podcasts: rows.map((r) => ({
             id: r.feed_id, feedUrl: r.feed_url, title: r.f_title ?? r.title ?? r.feed_url, author: r.author, image: artUrl(r.image), error: r.error, fetchedAt: r.fetched_at,
-            total: r.total, unplayed: r.total - r.played, settings: JSON.parse(r.settings), addedAt: r.added_at,
+            total: r.total, unplayed: r.total - r.played, settings: JSON.parse(r.settings), addedAt: r.added_at, rating: sync.rating(u, r.feed_key),
             releases: db.all("SELECT pub_date p, type t FROM episodes WHERE feed_id=? AND pub_date IS NOT NULL ORDER BY pub_date DESC LIMIT 40", r.feed_id).map((x) => [x.p, x.t]),
           })).sort((x, y) => x.title.localeCompare(y.title, "en", { sensitivity: "base" })),
         };
@@ -309,7 +329,7 @@ export async function buildApp(o: AppOptions) {
         const u = P(req).userId, f = feedOf(u, num((req.params as any).id));
         return {
           id: f.id, feedUrl: f.url, title: f.title ?? f.s_title ?? f.url, author: f.author, description: notes(f.description), image: artUrl(f.image), link: f.link,
-          error: f.error, fetchedAt: f.fetched_at, subscribed: !f.deleted, settings: JSON.parse(f.settings),
+          error: f.error, fetchedAt: f.fetched_at, subscribed: !f.deleted, settings: JSON.parse(f.settings), rating: sync.rating(u, f.key),
           episodes: db.all(`${EP} WHERE e.feed_id=? ORDER BY e.pub_date DESC, e.id DESC`, u, f.id).map(ep),
         };
       });
@@ -369,11 +389,47 @@ export async function buildApp(o: AppOptions) {
         if (!res.duplicate) broadcastLive(p, { ...ref(e), positionMs: position, durationMs: b.durationMs, playing: b.playing });
         return { rev: res.rev };
       });
+      // Feature 2 (0.10.0): a random episode of a subscribed podcast for "shuffle when Up Next ends" (web player).
+      a.get("/api/v1/shuffle", async (req) => {
+        const u = P(req).userId, exclude = Number((req.query as any).exclude) || 0;
+        const cands = db.all(`SELECT e.id, s.last_played_at FROM episodes e JOIN feeds f ON f.id=e.feed_id
+          JOIN subscriptions sub ON sub.user_id=? AND sub.feed_key=f.key AND sub.deleted=0
+          LEFT JOIN episode_state s ON s.user_id=? AND s.feed_key=f.key AND s.guid=e.guid WHERE e.id<>?`, u, u, exclude);
+        const id = pickShuffle(cands.map((c) => ({ item: c.id as number, lastPlayedAt: c.last_played_at ?? null })), Date.now(), Math.random());
+        return { episode: id == null ? null : ep(db.get(`${EP} WHERE e.id=?`, u, id)!) };
+      });
+
+      // 0.10.0: play history (scroll up on Up Next). Most recently played first; what is in the queue is left out.
+      a.get("/api/v1/history", async (req) => {
+        const u = P(req).userId, limit = Math.min(Math.max(Number((req.query as any).limit) || 50, 1), 200);
+        return {
+          episodes: db.all(`${EP} WHERE s.last_played_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM queue_items q WHERE q.user_id=s.user_id AND q.feed_key=s.feed_key AND q.guid=s.guid AND q.deleted=0)
+            ORDER BY s.last_played_at DESC, e.id DESC LIMIT ?`, u, limit).map(ep),
+        };
+      });
       a.get("/api/v1/latest", async (req) => {
         const p = P(req), s = sync.latest(p.userId);
         if (!s) return { latest: null };
         const e = db.get(`${EP} WHERE f.key=? AND e.guid=?`, p.userId, s.feed_key, s.guid);
         return { latest: e ? { episode: ep(e), deviceId: s.position_device, deviceName: s.dname, at: s.position_at, mine: s.position_device === p.deviceId } : null };
+      });
+
+      // Feature 6: personal rating of a podcast (1, -1, 0 = none); kept after unsubscribing.
+      a.put("/api/v1/podcasts/:id/rating", async (req) => {
+        const p = P(req), f = feedOf(p.userId, num((req.params as any).id)), r = (req.body as any)?.rating;
+        if (r !== 1 && r !== -1 && r !== 0) throw new AuthError(400, "bad_request", "rating must be 1, -1 or 0");
+        sync.push(p.userId, p.deviceId, { ratings: [{ feedUrl: f.url, rating: r, changedAt: Date.now() }] });
+        return { rating: sync.rating(p.userId, f.key) };
+      });
+
+      // ---- settings that follow the user (0.10.0)
+      a.get("/api/v1/settings", async (req) => ({ settings: sync.settings(P(req).userId).map(settingOut) }));
+      a.put("/api/v1/settings", async (req) => {
+        const p = P(req), b = (req.body ?? {}) as any;
+        if (typeof b.values !== "object" || !b.values || Array.isArray(b.values)) throw new AuthError(400, "bad_request", "values must be an object of key: value");
+        const changedAt = Date.now();
+        const res = sync.push(p.userId, p.deviceId, { settings: Object.entries(b.values).map(([key, value]) => ({ key, value, changedAt })) });
+        return { rev: res.rev, changed: res.settings, settings: sync.settings(p.userId).map(settingOut) };
       });
 
       // ---- subscriptions
@@ -559,7 +615,10 @@ export async function buildApp(o: AppOptions) {
   if (base) app.get("/healthz", { logLevel: "silent" }, async () => ({ ok: true })); // container healthcheck path is prefix-independent
 
   app.addHook("preClose", async () => { feeds.close(); events.close(); });
-  app.addHook("onClose", async () => db.close());
+  // Feature 7: check every minute for nearly finished episodes nobody resumed.
+  const autoFinish = setInterval(() => { try { const n = sync.autoFinish(); if (n) app.log.info({ n }, "marked nearly finished, abandoned episodes as played"); } catch (e: any) { app.log.error({ err: String(e?.message) }, "auto-finish failed"); } }, 60_000);
+  autoFinish.unref();
+  app.addHook("onClose", async () => { clearInterval(autoFinish); db.close(); });
 
   return { app, db, auth, sync, feeds, events };
 }

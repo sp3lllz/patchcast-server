@@ -1,5 +1,6 @@
 import type { Db, Row } from "./db.ts";
 import { enclosureKey, feedKey, normalizeFeedUrl } from "./urls.ts";
+import { cleanSetting, MAX_SETTINGS_PER_USER } from "./settings.ts";
 
 export interface EpisodeRef { feedUrl: string; guid?: string | null; enclosureUrl?: string | null; title?: string | null; pubDate?: number | null }
 export interface EpisodeChange extends EpisodeRef {
@@ -12,11 +13,39 @@ export interface EpisodeChange extends EpisodeRef {
 export interface SubscriptionChange { feedUrl: string; title?: string | null; deleted?: boolean; changedAt?: number; settings?: Record<string, unknown>; settingsChangedAt?: number }
 export interface QueueRef extends EpisodeRef { auto?: boolean; addedAt?: number }
 export interface QueuePush { base: EpisodeRef[]; items: QueueRef[]; replace?: boolean }
+/** One user setting (0.10.0). value null = back to the default. */
+export interface SettingChange { key: string; value: unknown; changedAt?: number }
+/** Feature 6: 1 = thumbs up, -1 = thumbs down, 0 = none. */
+export interface RatingChange { feedUrl: string; rating: number; changedAt?: number }
 export interface PushBody {
   pushId?: string; clientTime?: number; mode?: "merge" | "force";
-  subscriptions?: SubscriptionChange[]; episodes?: EpisodeChange[]; queue?: QueuePush | null;
+  subscriptions?: SubscriptionChange[]; episodes?: EpisodeChange[]; queue?: QueuePush | null; settings?: SettingChange[]; ratings?: RatingChange[];
 }
-export interface PushResult { rev: number; serverTime: number; subscriptions: number; episodes: number; queue: boolean; skipped: number; duplicate?: boolean }
+export interface PushResult { rev: number; serverTime: number; subscriptions: number; episodes: number; queue: boolean; settings: number; ratings: number; skipped: number; duplicate?: boolean }
+
+/** Feature 7 (0.10.0): an episode with less than this left… */
+export const AUTO_FINISH_REMAINING_MS = 5 * 60_000;
+/** …that isn't resumed on any device within this long after it was paused or stopped counts as played. */
+export const AUTO_FINISH_GRACE_MS = 10 * 60_000;
+
+/** The rule itself (the apps carry the same one for when there is no server). */
+export function shouldAutoFinish(e: { played: boolean; positionMs: number; durationMs: number | null; pausedAt: number }, now: number, since: number): boolean {
+  if (e.played || !e.durationMs || e.durationMs <= 0 || e.positionMs <= 0) return false;
+  if (e.durationMs - e.positionMs >= AUTO_FINISH_REMAINING_MS) return false;
+  return e.pausedAt >= since && now - e.pausedAt >= AUTO_FINISH_GRACE_MS;
+}
+
+/** Feature 2 (0.10.0): shuffle when the queue ends. Not heard in the last 30 days (or never) = this many times as likely. */
+export const SHUFFLE_RECENT_MS = 30 * 86_400_000;
+export const SHUFFLE_FRESH_WEIGHT = 4;
+/** Weighted random pick (the apps carry the same one). `rnd` in [0, 1). */
+export function pickShuffle<T>(cands: { item: T; lastPlayedAt: number | null }[], now: number, rnd: number): T | null {
+  if (!cands.length) return null;
+  const w = cands.map((c) => (c.lastPlayedAt != null && now - c.lastPlayedAt < SHUFFLE_RECENT_MS ? 1 : SHUFFLE_FRESH_WEIGHT));
+  let x = rnd * w.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < cands.length; i++) { x -= w[i]; if (x < 0) return cands[i].item; }
+  return cands[cands.length - 1].item;
+}
 
 /** Different devices this close together in time may disagree on the position by clock error alone… */
 export const SKEW_WINDOW_MS = 60_000;
@@ -79,9 +108,10 @@ export class SyncStore {
 
   push(userId: number, deviceId: string, body: PushBody): PushResult {
     if (typeof body !== "object" || !body) throw bad("body must be an object");
-    const subs = body.subscriptions ?? [], eps = body.episodes ?? [];
-    if (!Array.isArray(subs) || !Array.isArray(eps)) throw bad("subscriptions and episodes must be arrays");
-    if (subs.length > 2000 || eps.length > 5000) throw bad("too many records in one push (max 2000 subscriptions, 5000 episodes)");
+    const subs = body.subscriptions ?? [], eps = body.episodes ?? [], sets = body.settings ?? [], rats = body.ratings ?? [];
+    if (!Array.isArray(subs) || !Array.isArray(eps) || !Array.isArray(sets) || !Array.isArray(rats)) throw bad("subscriptions, episodes, settings and ratings must be arrays");
+    if (rats.length > 2000) throw bad("too many ratings in one push (max 2000)");
+    if (subs.length > 2000 || eps.length > 5000 || sets.length > 200) throw bad("too many records in one push (max 2000 subscriptions, 5000 episodes, 200 settings)");
     const pushId = optStr(body.pushId, 100);
     const now = this.now();
     // Server time is authoritative: shift client timestamps by the client's clock error, and never accept the future.
@@ -102,7 +132,11 @@ export class SyncStore {
       for (const s of subs) if (this.applySubscription(userId, deviceId, s, at, now)) nSubs++; else skipped++;
       for (const e of eps) if (this.applyEpisode(userId, deviceId, e, at, now, force)) nEps++; else skipped++;
       const q = body.queue ? this.applyQueue(userId, deviceId, body.queue, at, now) : false;
-      const res: PushResult = { rev: this.rev(userId), serverTime: now, subscriptions: nSubs, episodes: nEps, queue: q, skipped };
+      let nSets = 0;
+      for (const c of sets) if (this.applySetting(userId, deviceId, c, at, now, force)) nSets++; else skipped++;
+      let nRats = 0;
+      for (const r of rats) if (this.applyRating(userId, deviceId, r, at, force)) nRats++; else skipped++;
+      const res: PushResult = { rev: this.rev(userId), serverTime: now, subscriptions: nSubs, episodes: nEps, queue: q, settings: nSets, ratings: nRats, skipped };
       if (pushId) {
         this.db.run("INSERT INTO pushes(user_id,push_id,response,at) VALUES(?,?,?,?)", userId, pushId, JSON.stringify(res), now);
         this.db.run("DELETE FROM pushes WHERE at<?", now - 14 * 86_400_000);
@@ -150,6 +184,46 @@ export class SyncStore {
     return true;
   }
 
+  /** Newest change per key wins; on a tie the stored value stays (unless the device forces). */
+  private applySetting(userId: number, deviceId: string, c: SettingChange, at: (t: unknown) => number, now: number, force: boolean): boolean {
+    if (typeof c !== "object" || !c) throw bad("each setting must be an object");
+    const { key, json } = cleanSetting(c.key, c.value);
+    const t = at(c.changedAt);
+    const cur = this.db.get("SELECT value, changed_at FROM user_settings WHERE user_id=? AND key=?", userId, key);
+    if (cur && (force ? t < cur.changed_at : t <= cur.changed_at)) return false;
+    if (cur && cur.value === json) { this.db.run("UPDATE user_settings SET changed_at=? WHERE user_id=? AND key=?", t, userId, key); return false; }
+    if (!cur && (this.db.get("SELECT COUNT(*) n FROM user_settings WHERE user_id=?", userId) as Row).n >= MAX_SETTINGS_PER_USER) throw bad(`too many settings (max ${MAX_SETTINGS_PER_USER})`);
+    this.db.run(`INSERT INTO user_settings(user_id,key,value,changed_at,rev,updated_at,device_id) VALUES(?,?,?,?,?,?,?)
+      ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value, changed_at=excluded.changed_at, rev=excluded.rev, updated_at=excluded.updated_at, device_id=excluded.device_id`,
+      userId, key, json, t, this.bump(userId), now, deviceId);
+    return true;
+  }
+
+  /** Feature 6: newest change per podcast wins (ties keep the stored one unless forced). Kept after unsubscribing. */
+  private applyRating(userId: number, deviceId: string, c: RatingChange, at: (t: unknown) => number, force: boolean): boolean {
+    if (typeof c !== "object" || !c) throw bad("each rating must be an object");
+    const url = normalizeFeedUrl(str(c.feedUrl, MAX_URL, "feedUrl"));
+    if (!url) throw bad("Invalid feed URL");
+    if (c.rating !== 1 && c.rating !== -1 && c.rating !== 0) throw bad("rating must be 1, -1 or 0");
+    const key = feedKey(url), t = at(c.changedAt), now = this.now();
+    const cur = this.db.get("SELECT rating, changed_at FROM ratings WHERE user_id=? AND feed_key=?", userId, key);
+    if (cur && (force ? t < cur.changed_at : t <= cur.changed_at)) return false;
+    if (cur && cur.rating === c.rating) { this.db.run("UPDATE ratings SET changed_at=? WHERE user_id=? AND feed_key=?", t, userId, key); return false; }
+    this.db.run(`INSERT INTO ratings(user_id,feed_key,feed_url,rating,changed_at,rev,updated_at,device_id) VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(user_id,feed_key) DO UPDATE SET rating=excluded.rating, changed_at=excluded.changed_at, rev=excluded.rev, updated_at=excluded.updated_at, device_id=excluded.device_id`,
+      userId, key, url, c.rating, t, this.bump(userId), now, deviceId);
+    return true;
+  }
+
+  rating(userId: number, key: string): number {
+    return (this.db.get("SELECT rating FROM ratings WHERE user_id=? AND feed_key=?", userId, key) as Row | undefined)?.rating ?? 0;
+  }
+
+  /** Every stored setting of a user (resets included, as null). */
+  settings(userId: number): Row[] {
+    return this.db.all("SELECT * FROM user_settings WHERE user_id=? ORDER BY key", userId);
+  }
+
   ensureFeed(key: string, url: string, title: string | null): number {
     const f = this.db.get("SELECT id FROM feeds WHERE key=?", key);
     if (f) return f.id;
@@ -195,6 +269,8 @@ export class SyncStore {
         if (p > 0) n.last_played_at = Math.max(cur.last_played_at ?? 0, lp);
       }
     }
+    // 0.10.0 (play history): the time it was last listened to also counts when it came with a finish, not only with a position.
+    if (num(c.lastPlayedAt) != null && num(c.lastPlayedAt)! > 0 && (c.played === true || pos(c.positionMs) > 0)) n.last_played_at = Math.max(n.last_played_at ?? 0, at(c.lastPlayedAt));
     if (num(c.durationMs) && num(c.durationMs)! > 0) n.duration_ms = num(c.durationMs);
 
     const visible = ["played", "position_ms", "duration_ms", "last_played_at", "completed_at", "unplayed_explicit"];
@@ -212,6 +288,40 @@ export class SyncStore {
       changed ? this.bump(userId) : cur.rev, changed ? now : cur.updated_at, changed ? deviceId : cur.device_id);
     if (n.played && !cur.played) this.dropFromQueue(userId, deviceId, now, (q) => q.feed_key === r.feedKey && q.guid === r.guid);
     return changed;
+  }
+
+  // ------------------------------------------------------------------ feature 7: nearly finished + abandoned = played
+
+  autoFinishSince(): number {
+    return Number((this.db.get("SELECT value FROM meta WHERE key='auto_finish_since'") as Row | undefined)?.value ?? Number.MAX_SAFE_INTEGER);
+  }
+
+  /**
+   * Marks episodes played that have < 5 min left and whose last position (a pause, stop or the last progress while playing)
+   * is ≥ 10 min old, on every device. Any progress resets the clock, so listening anywhere prevents it. Like a finish: position 0,
+   * gone from the queue. Returns the number marked. `userId` limits it to one user (done before every pull).
+   */
+  autoFinish(userId?: number): number {
+    const now = this.now(), since = this.autoFinishSince();
+    const rows = this.db.all(`SELECT user_id, feed_key, guid, position_ms, position_at, duration_ms FROM episode_state
+      WHERE played=0 AND position_ms>0 AND duration_ms>0 AND duration_ms-position_ms<? AND position_at>=? AND position_at<=? ${userId != null ? "AND user_id=?" : ""}`,
+      ...[AUTO_FINISH_REMAINING_MS, since, now - AUTO_FINISH_GRACE_MS, ...(userId != null ? [userId] : [])]);
+    let n = 0;
+    const touched = new Map<number, number>();
+    for (const r of rows) {
+      if (!shouldAutoFinish({ played: false, positionMs: r.position_ms, durationMs: r.duration_ms, pausedAt: r.position_at }, now, since)) continue;
+      const at = r.position_at + AUTO_FINISH_GRACE_MS;
+      this.db.tx(() => {
+        const rev = this.bump(r.user_id);
+        this.db.run(`UPDATE episode_state SET played=1, played_at=?, unplayed_explicit=0, completed_at=?, position_ms=0, position_at=?, position_device=NULL,
+          rev=?, updated_at=?, device_id=NULL WHERE user_id=? AND feed_key=? AND guid=? AND played=0`, at, at, at, rev, now, r.user_id, r.feed_key, r.guid);
+        this.dropFromQueue(r.user_id, "server", now, (q) => q.feed_key === r.feed_key && q.guid === r.guid);
+        touched.set(r.user_id, this.rev(r.user_id));
+      });
+      n++;
+    }
+    for (const [u, rev] of touched) this.onChange(u, rev, null);
+    return n;
   }
 
   // ------------------------------------------------------------------ queue
@@ -281,6 +391,7 @@ export class SyncStore {
   // ------------------------------------------------------------------ pull
 
   pull(userId: number, since: number, opts: { limit?: number; feedUrl?: string } = {}) {
+    this.autoFinish(userId); // lazily, so a pull never shows an episode that should already count as played
     const limit = Math.min(Math.max(opts.limit ?? 1000, 1), 5000);
     const current = this.rev(userId);
     const key = opts.feedUrl ? feedKey(opts.feedUrl) : null;
@@ -288,7 +399,10 @@ export class SyncStore {
       ...[userId, since, ...(key ? [key] : []), limit + 1]);
     const eps = this.db.all(`SELECT s.*, d.name dname FROM episode_state s LEFT JOIN devices d ON d.id=COALESCE(s.position_device, s.device_id) WHERE s.user_id=? AND s.rev>? ${key ? "AND feed_key=?" : ""} ORDER BY s.rev LIMIT ?`,
       ...[userId, since, ...(key ? [key] : []), limit + 1]);
-    const all = [...subs, ...eps].sort((a, b) => a.rev - b.rev);
+    // Settings aren't per podcast: a feed= pull leaves them out.
+    const sets = key ? [] : this.db.all("SELECT * FROM user_settings WHERE user_id=? AND rev>? ORDER BY rev LIMIT ?", userId, since, limit + 1);
+    const rats = key ? [] : this.db.all("SELECT * FROM ratings WHERE user_id=? AND rev>? ORDER BY rev LIMIT ?", userId, since, limit + 1);
+    const all = [...subs, ...eps, ...sets, ...rats].sort((a, b) => a.rev - b.rev);
     const hasMore = all.length > limit;
     const upto = hasMore ? all[limit - 1].rev : current;
     const queueRev = (this.db.get("SELECT MAX(rev) r FROM queue_items WHERE user_id=?", userId) as Row).r ?? 0;
@@ -296,6 +410,8 @@ export class SyncStore {
       rev: upto, hasMore, serverTime: this.now(),
       subscriptions: subs.filter((s) => s.rev <= upto).map(subOut),
       episodes: eps.filter((e) => e.rev <= upto).map(stateOut),
+      settings: sets.filter((x) => x.rev <= upto).map(settingOut),
+      ratings: rats.filter((x) => x.rev <= upto).map((r) => ({ feedUrl: r.feed_url, rating: r.rating, changedAt: r.changed_at, rev: r.rev, updatedAt: r.updated_at, deviceId: r.device_id })),
       // The whole ordered queue whenever any part of it changed (it is small); tombstones stay on the server.
       queue: !hasMore && !key && queueRev > since ? this.queue(userId).map((q) => ({
         feedUrl: q.feed_url, guid: q.guid, enclosureUrl: q.enclosure_url, title: q.title, auto: !!q.auto, addedAt: q.added_at })) : null,
@@ -315,6 +431,9 @@ export class SyncStore {
 export function subOut(s: Row) {
   return { feedUrl: s.feed_url, title: s.title, settings: JSON.parse(s.settings), deleted: !!s.deleted, addedAt: s.added_at, rev: s.rev, updatedAt: s.updated_at, deviceId: s.device_id };
 }
+export function settingOut(s: Row) {
+  return { key: s.key, value: s.value == null ? null : JSON.parse(s.value), changedAt: s.changed_at, rev: s.rev, updatedAt: s.updated_at, deviceId: s.device_id };
+}
 export function stateOut(e: Row) {
   return {
     feedUrl: e.feed_url, guid: e.guid, enclosureUrl: e.enclosure_url, title: e.title, pubDate: e.pub_date, played: !!e.played,
@@ -332,6 +451,11 @@ export function cleanSettings(s: Record<string, unknown>): Record<string, unknow
   if (s.autoQueue === null || typeof s.autoQueue === "boolean") out.autoQueue = s.autoQueue;
   if (typeof s.exclude === "boolean") { out.exclude = s.exclude; if (s.autoQueue === undefined) out.autoQueue = s.exclude ? false : null; }
   if (out.autoQueue !== undefined) out.exclude = out.autoQueue === false;
+  // 0.10.0: the rest of a podcast's settings (null = follow the global setting).
+  if (s.autoDownload === null || typeof s.autoDownload === "boolean") out.autoDownload = s.autoDownload;
+  if (s.retentionMode === null || (typeof s.retentionMode === "string" && ["KEEP_ALL", "KEEP_LATEST", "DELETE_PLAYED"].includes(s.retentionMode))) out.retentionMode = s.retentionMode;
+  if (s.retentionKeep === null || (typeof s.retentionKeep === "number" && Number.isInteger(s.retentionKeep) && s.retentionKeep >= 1 && s.retentionKeep <= 100)) out.retentionKeep = s.retentionKeep;
+  if (s.newTimeoutDays === null || (typeof s.newTimeoutDays === "number" && Number.isInteger(s.newTimeoutDays) && s.newTimeoutDays >= 0 && s.newTimeoutDays <= 365)) out.newTimeoutDays = s.newTimeoutDays;
   return out;
 }
 
