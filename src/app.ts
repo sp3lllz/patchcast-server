@@ -369,6 +369,14 @@ export async function buildApp(o: AppOptions) {
         if (!res.duplicate) broadcastLive(p, { ...ref(e), positionMs: position, durationMs: b.durationMs, playing: b.playing });
         return { rev: res.rev };
       });
+      // 0.10.0: play history (scroll up on Up Next). Most recently played first; what is in the queue is left out.
+      a.get("/api/v1/history", async (req) => {
+        const u = P(req).userId, limit = Math.min(Math.max(Number((req.query as any).limit) || 50, 1), 200);
+        return {
+          episodes: db.all(`${EP} WHERE s.last_played_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM queue_items q WHERE q.user_id=s.user_id AND q.feed_key=s.feed_key AND q.guid=s.guid AND q.deleted=0)
+            ORDER BY s.last_played_at DESC, e.id DESC LIMIT ?`, u, limit).map(ep),
+        };
+      });
       a.get("/api/v1/latest", async (req) => {
         const p = P(req), s = sync.latest(p.userId);
         if (!s) return { latest: null };

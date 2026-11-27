@@ -79,6 +79,7 @@ Limits: 5000 episodes, 2000 subscriptions, 200 settings (500 stored per user), 8
 | Played | `played: true` is sticky. It is only undone by `played: false` with `explicitUnplayed` **and** a strictly newer `playedChangedAt`. After such an unplay, an older played event stays ignored |
 | Position | Newest `positionChangedAt` wins, backwards too. Equal times: the larger position |
 | Skew guard | A backwards move of < 15 s from a *different* device within 60 s of the stored time is ignored (it's noise, not a rewind) |
+| Last played | `lastPlayedAt` counts when sent with a position > 0 or (0.10+) with `played: true`; the newest is kept |
 | Finishing | Resets the position to 0. Progress from before the finish can't undo it. Progress after it is a replay and leaves `played` set |
 | Subscription | Newest `changedAt` wins between subscribed and deleted; a tie keeps the subscription. Pushes without `deleted` never resurrect one |
 | Podcast settings | Newest `settingsChangedAt` wins; only the keys sent are changed |
@@ -122,6 +123,7 @@ progress made elsewhere. Back off exponentially on errors; keep changes until a 
 
 ## Web client API (same authentication)
 `GET /library`, `/podcasts/:id`, `/episodes/:id`, `/episodes/:id/chapters`, `/new?days=14`, `/queue`, `/latest`, `/search?q=` · `PUT /queue {base:[id],items:[id],auto:[id]}` ·
+`GET /history?limit=50` (0.10+) → `{episodes}` most recently played first, queued ones left out ·
 `GET /settings` → `{settings:[{key,value,changedAt,rev,updatedAt,deviceId}]}`, `PUT /settings {values:{key:value}}` (0.10+) ·
 `POST /episodes/played {ids,played}`, `/episodes/:id/progress {positionMs,durationMs,playing,finished,changedAt,clientTime}`, `/subscriptions {url}`, `/refresh {podcastId?}` ·
 `PATCH/DELETE /subscriptions/:id` · `GET /export/opml|history`, `POST /import/opml|history` (the app's formats, see `HISTORY_FORMAT.md`) ·

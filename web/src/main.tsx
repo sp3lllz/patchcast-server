@@ -227,6 +227,21 @@ function EpisodePage({ id }: { id: number }) {
   );
 }
 
+/** 0.10.0: what was played before sits above Up Next (oldest at the top); the page opens at Up Next, scroll up for history. */
+function History() {
+  const { data } = useData<{ episodes: Episode[] }>("/history?limit=50");
+  const top = useRef<HTMLHeadingElement>(null);
+  const scrolled = useRef(false);
+  useLayoutEffect(() => {
+    if (!data || scrolled.current) return;
+    scrolled.current = true;
+    if (data.episodes.length) document.getElementById("upnext")?.scrollIntoView({ block: "start" });
+  }, [data]);
+  if (!data?.episodes.length) return null;
+  return <section class="history" aria-label="Recently played"><h2 ref={top}>Recently played</h2>
+    {[...data.episodes].reverse().map((e) => <Row e={e} key={`h${e.id}`} />)}</section>;
+}
+
 function Queue() {
   const { data, error } = useData<{ items: Episode[]; hidden: number }>("/queue");
   const [items, setItems] = useState<Episode[]>([]);
@@ -256,7 +271,8 @@ function Queue() {
   const nudge = (i: number, d: number) => { const n = [...items]; const j = i + d; if (j < 0 || j >= n.length) return; [n[i], n[j]] = [n[j], n[i]]; n[j] = { ...n[j], auto: false }; commit(n); };
   return (
     <>
-      <div class="head"><h1>Up Next</h1>{items.length > 0 && <button class="btn" onClick={() => confirm("Clear Up Next on all devices?") && commit([])}>Clear</button>}</div><Err m={error} />
+      <History />
+      <div class="head" id="upnext"><h1>Up Next</h1>{items.length > 0 && <button class="btn" onClick={() => confirm("Clear Up Next on all devices?") && commit([])}>Clear</button>}</div><Err m={error} />
       <div ref={box}>{items.map((e, i) => <div key={e.id} class={drag === e.id ? "dragging" : ""}><Row e={e} remove={() => commit(items.filter((x) => x.id !== e.id))}
         handle={<button class="ib handle" aria-label={`Reorder ${e.title} (drag, or arrow keys)`} title="Drag to reorder" onPointerDown={(x) => start(x as any, e.id)} onKeyDown={(k) => { if (k.key === "ArrowUp" || k.key === "ArrowDown") { k.preventDefault(); k.stopPropagation(); nudge(i, k.key === "ArrowUp" ? -1 : 1); } }}><Icon n="drag" /></button>} /></div>)}</div>
       {data && !items.length && <Empty>Up Next is empty. Use the queue button on any episode.</Empty>}

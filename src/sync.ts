@@ -220,6 +220,8 @@ export class SyncStore {
         if (p > 0) n.last_played_at = Math.max(cur.last_played_at ?? 0, lp);
       }
     }
+    // 0.10.0 (play history): the time it was last listened to also counts when it came with a finish, not only with a position.
+    if (num(c.lastPlayedAt) != null && num(c.lastPlayedAt)! > 0 && (c.played === true || pos(c.positionMs) > 0)) n.last_played_at = Math.max(n.last_played_at ?? 0, at(c.lastPlayedAt));
     if (num(c.durationMs) && num(c.durationMs)! > 0) n.duration_ms = num(c.durationMs);
 
     const visible = ["played", "position_ms", "duration_ms", "last_played_at", "completed_at", "unplayed_explicit"];
