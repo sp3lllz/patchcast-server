@@ -397,21 +397,32 @@ function Controls() {
 }
 const Speed = () => { const p = useStore(P.player); return <label class="sel" title="Playback speed"><select aria-label="Playback speed" value={String(p.speed)} onChange={(e) => P.setSpeed(Number(e.currentTarget.value))}>{[...new Set([0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3, p.speed])].sort((a, b) => a - b).map((s) => <option value={String(s)}>{s}×</option>)}</select></label>; };
 
+/** 0.10.0: Show notes and Chapters sit in the same bar as Speed and Sleep; one panel is shown at a time. */
+const panel = new Store<"notes" | "chapters" | null>(null);
 function PlayerBar() {
-  const p = useStore(P.player), open = useStore(expanded);
+  const p = useStore(P.player), open = useStore(expanded), pick = useStore(panel);
   if (!p.ep) return null;
   const c = P.chapterAt(p.chapters, p.position), art = c?.image ?? p.art;
+  const nChapters = p.chapters.filter((x) => !x.hidden).length;
+  const shown = pick === "chapters" && nChapters ? "chapters" : pick === "notes" || !nChapters ? "notes" : "chapters";
+  const show = (x: "notes" | "chapters") => { panel.set(x); requestAnimationFrame(() => document.getElementById("now-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })); };
   return (
     <>
       {open && <div class="now" role="dialog" aria-label="Now playing"><div class="inner">
         <div class="head"><Btn n="down" label="Close player" onClick={() => expanded.set(false)} /><span class="grow" /><A to={`/episode/${p.ep.id}`} class="btn">Episode page</A></div>
-        <div class="cols"><div class="left"><Art src={art} cls="huge" /><h2>{p.ep.title}</h2><div class="sub">{p.ep.podcast}</div>{c && !c.hidden && <div class="chapter">{c.title}</div>}<Seek /><Controls /><div class="extras"><Speed /><SleepMenu /><Volume /></div>{p.via === "proxy" && <div class="sub">Streaming through your server</div>}<Err m={p.error} /></div>
-          <div class="right">{p.chapters.some((x) => !x.hidden) && <><h3>Chapters ({p.chapters.filter((x) => !x.hidden).length})</h3><ChapterList chapters={p.chapters} position={p.position} onPick={P.seek} /></>}<h3>Show notes</h3><Notes html={p.ep.notes ?? ""} duration={p.duration} onSeek={P.seek} /></div></div></div></div>}
+        <div class="cols"><div class="left"><Art src={art} cls="huge" /><h2>{p.ep.title}</h2><div class="sub">{p.ep.podcast}</div>{c && !c.hidden && <div class="chapter">{c.title}</div>}<Seek /><Controls />
+          <div class="extras toolbar"><Speed /><SleepMenu />
+            <button class={`btn ${shown === "notes" ? "on" : ""}`} aria-pressed={shown === "notes"} aria-controls="now-panel" aria-label="Show notes" onClick={() => show("notes")}>Notes</button>
+            {nChapters > 0 && <button class={`btn ${shown === "chapters" ? "on" : ""}`} aria-pressed={shown === "chapters"} aria-controls="now-panel" aria-label={`Chapters, ${nChapters}`} onClick={() => show("chapters")}>Chapters {nChapters}</button>}
+            </div><div class="extras"><Volume /></div>{p.via === "proxy" && <div class="sub">Streaming through your server</div>}<Err m={p.error} /></div>
+          <div class="right" id="now-panel">{shown === "chapters" ? <><h3>Chapters ({nChapters})</h3><ChapterList chapters={p.chapters} position={p.position} onPick={P.seek} /></>
+            : <><h3>Show notes</h3><Notes html={p.ep.notes ?? ""} duration={p.duration} onSeek={P.seek} /></>}</div></div></div></div>}
       <div class="player"><div class="info" onClick={() => expanded.set(!open)} role="button" tabIndex={0} aria-label="Open player" onKeyDown={(e) => e.key === "Enter" && expanded.set(!open)}><Art src={art} /><div class="grow"><b>{p.ep.title}</b><span class="sub">{p.error ?? (c && !c.hidden ? c.title : p.ep.podcast)}</span></div></div>
         <div class="mid"><Controls /><Seek /></div><div class="extras"><Speed /><SleepMenu /><Volume /></div></div>
     </>
   );
 }
+
 const Volume = () => { const p = useStore(P.player); return <label class="vol" title="Volume"><Icon n="vol" /><input type="range" aria-label="Volume" min={0} max={1} step={0.01} value={p.volume} onInput={(e) => P.setVolume(Number(e.currentTarget.value))} /></label>; };
 
 function Banner() {

@@ -55,3 +55,5 @@ form.inline { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; } form.inlin
   .player { left:0; bottom:calc(61px + env(safe-area-inset-bottom)); padding:8px 12px; grid-template-columns:minmax(0,1fr) auto; gap:8px; } .player .mid .seek,.player .controls .ib:first-child,.player .controls .ib:last-child,.player .controls .ib.txt:nth-child(2) { display:none; } .player .art { width:46px; height:46px; } .player .ib.big { width:44px; height:44px; }
   .now { inset:0; bottom:calc(61px + 63px + env(safe-area-inset-bottom)); } .now .inner { padding:8px 16px 24px; } .huge { max-width:290px; } .banner { flex-wrap:wrap; } .toast { bottom:150px; width:max-content; }
 }
+/* 0.10.0: the expanded player's one bar: speed, sleep, show notes, chapters, volume */
+.extras.toolbar { flex-wrap:wrap; row-gap:8px; gap:8px; } .extras.toolbar .sel select { max-width:84px; } .extras.toolbar .btn { padding:6px 12px; font-size:.85rem; } .extras.toolbar .btn.on { background:var(--tonal); color:var(--ontonal); border-color:transparent; }
