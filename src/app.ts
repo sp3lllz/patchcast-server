@@ -205,6 +205,26 @@ export async function buildApp(o: AppOptions) {
           endSessionUrl = await oidc.logoutUrl(s.id_token ? auth.unseal(s.id_token) : null, `${config.publicUrl}${base}/`).catch(() => null);
         return { ok: true, endSessionUrl };
       });
+      // Feature 8 (0.10.0): delete my own account and everything stored for it (Apple 5.1.1(v)). The provider's account is never touched.
+      a.delete("/api/v1/me", async (req, reply) => {
+        const p = P(req), b = (req.body ?? {}) as any;
+        if (typeof b.confirm !== "string" || b.confirm.trim().toLowerCase() !== p.username.toLowerCase())
+          throw new AuthError(400, "confirm_required", "Type your user name to confirm");
+        if (p.via === "cookie") {
+          // A browser left signed in must not be enough: a sign-in from the last 15 minutes is required.
+          const s = db.get("SELECT created_at FROM sessions WHERE id_hash=?", p.sessionHash);
+          if (!s || Date.now() - s.created_at > 15 * 60_000) throw new AuthError(403, "reauth_required", "Sign in again, then delete your account within 15 minutes");
+        }
+        if (p.isAdmin) {
+          const admins = (db.get("SELECT COUNT(*) n FROM users WHERE is_admin=1") as any).n, users = (db.get("SELECT COUNT(*) n FROM users") as any).n;
+          if (admins <= 1 && users > 1) throw new AuthError(409, "last_admin", "You are the only administrator: give someone else administrator rights first (OIDC_ADMIN_GROUPS), or delete the other accounts");
+        }
+        db.run("DELETE FROM users WHERE id=?", p.userId); // cascades: devices, sessions, identity link, subscriptions, history, queue, settings, ratings
+        events.drop((c) => c.userId === p.userId);
+        if (p.via === "cookie") setCookie(req, reply, "", 0);
+        req.log.info("an account deleted itself");
+        return { deleted: true };
+      });
       a.get("/api/v1/me/account", { preHandler: cookieOnly }, async (req) => accounts.describe(P(req)));
 
       // ---- devices

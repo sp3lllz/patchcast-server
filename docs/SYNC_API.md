@@ -14,6 +14,7 @@ creates an account at a person's first sign-in (unless `OIDC_AUTO_CREATE=false`)
 | Apps | Browser flow below → `POST /auth/oidc/exchange` → `{token, deviceId, user, version}`. Then `Authorization: Bearer pct_…`. 401 = revoked: sign in again |
 | Browsers | Navigate to `<server>/auth/oidc/login?returnTo=/path`; returns with an `HttpOnly` session cookie. `GET /me` → `{user, deviceId, csrf, …}`; send `X-CSRF-Token` on every non-GET |
 | Both | `GET /me`, `POST /auth/logout` (revokes the calling device), `GET /devices`, `PATCH /devices/:id {name}`, `DELETE /devices/:id` (an app may only delete itself) |
+| Both (0.10+) | `DELETE /me {confirm: "<user name>"}` deletes the account and everything stored for it (devices, sessions, the identity link, subscriptions, positions/history, queue, settings, ratings) → `{deleted: true}`. Errors: `400 confirm_required`; `403 reauth_required` (browser session older than 15 min: sign in again first); `409 last_admin` (the only administrator while other accounts exist). The provider's own account is never touched |
 | Browser only | `GET /me/account` → `{username, displayName, isAdmin, sessionVia, oidc:{providerName, issuer}, identity:{username, email, linkedAt, lastLoginAt}}`. `POST /auth/logout {provider: true}` → `{endSessionUrl}` |
 | Admin, browser only | `GET /users` → `{autoCreate, providerName, users:[{id, username, displayName, isAdmin, oidc, email, lastLoginAt, podcasts, createdAt}]}` (`oidc: false` = account from 0.7 without an identity, can't sign in), `DELETE /users/:id` |
 

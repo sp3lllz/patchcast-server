@@ -328,7 +328,33 @@ function Account({ acc, error }: { acc: any; error: string | null }) {
   return <section class="panel"><h2>Account</h2>
     <div class="line"><div class="grow"><b>{acc.displayName ?? acc.username}</b>{acc.isAdmin && <i class="chip">Admin</i>}
       <div class="sub">{acc.username} · signs in with {name}{i && [i.username, i.email].some(Boolean) ? ` as ${[i.username, i.email].filter(Boolean).join(" · ")}` : ""}{i?.lastLoginAt ? ` · last sign-in ${ago(i.lastLoginAt)}` : ""}</div></div></div>
-    <p class="sub">Your name, email, passkeys and sign-in methods are managed in {name}.</p></section>;
+    <p class="sub">Your name, email, passkeys and sign-in methods are managed in {name}.</p>
+    <DeleteAccount username={acc.username} provider={name} /></section>;
+}
+
+/** Feature 8: delete this account and everything the server keeps for it. */
+function DeleteAccount({ username, provider }: { username: string; provider: string }) {
+  const [open, setOpen] = useState(false), [typed, setTyped] = useState(""), [busy, setBusy] = useState(false), [err, setErr] = useState<string | null>(null);
+  const del = async () => {
+    setBusy(true); setErr(null);
+    try { await api("DELETE", "/me", { confirm: typed }); P.audio.pause(); signedOut(); say("Your account and its data were deleted"); }
+    catch (e: any) {
+      if (e instanceof ApiError && e.code === "reauth_required") { location.href = `${BASE}/auth/oidc/login?returnTo=${encodeURIComponent("/settings")}`; return; }
+      setErr(e.message);
+    } finally { setBusy(false); }
+  };
+  if (!open) return <div class="actions"><button class="btn danger" onClick={() => setOpen(true)}>Delete my account…</button></div>;
+  return <div class="danger-zone" role="group" aria-label="Delete my account">
+    <h3>Delete my account</h3>
+    <p>This permanently erases everything this server keeps for <b>{username}</b>: subscriptions, playback positions and history, Up Next,
+      settings, ratings, all your devices and every signed-in session, and the link to your {provider} sign-in. Your {provider} account itself
+      is not touched. Episodes downloaded in the apps stay on those devices. This can't be undone.</p>
+    <label class="check">Type your user name to confirm <input value={typed} onInput={(e) => setTyped(e.currentTarget.value)} autoComplete="off" aria-label="Your user name" /></label>
+    <Err m={err} />
+    <div class="actions"><button class="btn danger" disabled={busy || typed.trim().toLowerCase() !== username.toLowerCase()} onClick={del}>Delete everything</button>
+      <button class="btn" onClick={() => { setOpen(false); setTyped(""); setErr(null); }}>Cancel</button></div>
+    <p class="sub">For your safety the server asks you to sign in again if you signed in more than 15 minutes ago.</p>
+  </div>;
 }
 
 function Users({ me: self, users, error }: { me: number; users: any; error: string | null }) {
