@@ -1,6 +1,6 @@
 import { render, type ComponentChildren } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
-import { api, ApiError, BASE, setCsrf, whenUnauthorized, type Chapter, type Episode, type Podcast, type Transcript } from "./api.ts";
+import { api, ApiError, BASE, setCsrf, whenUnauthorized, type Chapter, type Episode, type Person, type Podcast, type Transcript } from "./api.ts";
 import { ago, dataVersion, day, dur, fmt, say, Store, toast, useStore } from "./store.ts";
 import * as P from "./player.ts";
 import { prefs, loadPrefs, setPref, type Prefs } from "./settings.ts";
@@ -108,6 +108,16 @@ function Library() {
   );
 }
 
+/** 0.11.0: podcast:person — the show's hosts, or an episode's guests. Pictures come through the server; names link out when given. */
+const roleName = (r: string) => r ? r[0].toUpperCase() + r.slice(1) : "";
+function People({ list, label }: { list?: Person[]; label: string }) {
+  if (!list?.length) return null;
+  return <ul class="people" aria-label={label}>{list.map((p) => {
+    const body = <>{p.img ? <Art src={p.img} cls="face" /> : <span class="face none" aria-hidden="true">{p.name.slice(0, 1)}</span>}<span><b>{p.name}</b><span class="sub">{roleName(p.role)}</span></span></>;
+    return <li key={p.name + p.role}>{p.href ? <a href={p.href} target="_blank" rel="noopener noreferrer" title={`${p.name} (opens their page)`}>{body}</a> : <span>{body}</span>}</li>;
+  })}</ul>;
+}
+
 /** Feature 6: your own thumbs up / down for a podcast; it stays when you unsubscribe and is there again if you come back. */
 function Rating({ id, value }: { id: number; value: number }) {
   const [v, setV] = useState(value);
@@ -140,6 +150,7 @@ function PodcastPage({ id }: { id: number }) {
     <>
       <div class="hero"><Art src={p.image} /><div class="grow">
         <h1>{p.title}</h1>{p.author && <div class="sub">{p.author}</div>}
+        <People list={p.persons} label="People on this podcast" />
         <Rating id={id} value={p.rating ?? 0} />
         <div class={`pred ${h.late ? "late" : ""}`}><b>{h.head}</b><span>{h.detail}</span></div>
         <div class="actions">
@@ -265,6 +276,7 @@ function EpisodePage({ id }: { id: number }) {
       <div class="hero"><Art src={cur?.image ?? ch?.image ?? e.image} /><div class="grow">
         <A to={`/podcast/${e.feedId}`} class="sub">{e.podcast}</A><h1>{e.title}</h1>
         <div class="sub">{day(e.pubDate)}{e.durationMs ? ` · ${dur(e.durationMs)}` : ""}{e.positionMs > 0 && !e.played ? ` · at ${fmt(at ?? e.positionMs)}` : ""}{e.played ? " · Played" : ""}{e.lastDevice && !current && e.positionMs > 0 ? ` · last on ${e.lastDevice.name}` : ""}</div>
+        <People list={e.persons} label="People in this episode" />
         <div class="actions">
           <button class="btn primary" onClick={() => (current ? P.toggle() : P.play(id))}><Icon n={playing ? "pause" : "play"} /> {playing ? "Pause" : e.positionMs > 0 && !e.played ? `Resume ${fmt(at ?? e.positionMs)}` : "Play"}</button>
           <button class="btn tonal" onClick={() => P.addToQueue(id, true)}>Play next</button>

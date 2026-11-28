@@ -7,9 +7,31 @@ export interface ParsedEpisode {
   number: number | null; season: number | null; type: string | null; psc: Chapter[];
   /** podcast:transcript links (0.11); only present when the item has some, so older episodes' change hashes stay the same. */
   transcripts?: { url: string; type: string; language: string | null; rel: string | null }[];
+  /** podcast:person on the item (0.11); only present when it has some. */
+  persons?: Person[];
 }
 export interface ParsedFeed {
   title: string; description: string | null; author: string | null; image: string | null; link: string | null; episodes: ParsedEpisode[];
+  /** podcast:person at feed level (0.11): the show's regular people; apply to every episode that has none of its own. */
+  persons: Person[];
+}
+/** podcast:person (0.11). Same rules in the apps (Persons.swift / Persons.kt). */
+export interface Person { name: string; role: string; group: string; img: string | null; href: string | null }
+
+/** Name required; role defaults to "host", group to "cast" (lower case); img/href only http(s); at most 30, duplicates dropped. */
+export function parsePersons(els: { attrs: Record<string, string>; text: string }[]): Person[] {
+  const out: Person[] = [], seen = new Set<string>();
+  for (const e of els) {
+    const name = decodeEntities(e.text).replace(/\s+/g, " ").trim().slice(0, 120);
+    if (!name) continue;
+    const role = (e.attrs.role ?? "").trim().toLowerCase() || "host", group = (e.attrs.group ?? "").trim().toLowerCase() || "cast";
+    const key = `${name.toLowerCase()}|${role}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, role, group, img: httpUrl(e.attrs.img), href: httpUrl(e.attrs.href) });
+    if (out.length >= 30) break;
+  }
+  return out;
 }
 export class FeedParseError extends Error {}
 
@@ -113,6 +135,7 @@ export function parseFeed(xml: string): ParsedFeed {
       author: txt("itunes:author") ?? author?.children.find((e) => e.name === "name")?.text.trim() ?? null,
       image: attr("itunes:image", "href") ?? txt("logo") ?? txt("icon"),
       link: c.find((e) => e.name === "link" && (e.attrs.rel ?? "alternate") === "alternate")?.attrs.href ?? null, episodes,
+      persons: parsePersons(c.filter((e) => e.name === "podcast:person")),
     };
   }
   const rssImg = c.find((e) => e.name === "image")?.children.find((e) => e.name === "url")?.text.trim() ?? null;
@@ -121,6 +144,7 @@ export function parseFeed(xml: string): ParsedFeed {
     author: clean(txt("itunes:author") ?? txt("managingeditor") ?? txt("dc:creator")),
     image: (attr("itunes:image", "href") ?? rssImg ?? attr("media:thumbnail", "url"))?.trim() ?? null,
     link: c.find((e) => e.name === "link" && e.text.trim())?.text.trim() ?? null, episodes,
+    persons: parsePersons(c.filter((e) => e.name === "podcast:person")),
   };
 }
 
@@ -160,6 +184,7 @@ function rssItem(item: El): ParsedEpisode | null {
     number: int(g.text("itunes:episode")), season: int(g.text("itunes:season")),
     type: g.text("itunes:episodetype")?.toLowerCase() ?? null,
     ...transcriptLinks(g.all("podcast:transcript")),
+    ...itemPersons(g.all("podcast:person")),
     psc: normalizeChapters(g.all("psc:chapters").flatMap((e) => e.children).filter((e) => e.name === "psc:chapter").flatMap((e) => {
       const start = parseNpt(e.attrs.start);
       return start == null ? [] : [{ startMs: start, title: decodeEntities(e.attrs.title ?? ""), url: httpUrl(e.attrs.href), image: httpUrl(e.attrs.image) }];
@@ -180,7 +205,13 @@ function atomEntry(item: El): ParsedEpisode | null {
     link: links.find((l) => (l.attrs.rel ?? "alternate") === "alternate")?.attrs.href ?? null, chaptersUrl: g.attr("podcast:chapters", "url"),
     number: null, season: null, type: g.text("itunes:episodetype")?.toLowerCase() ?? null, psc: [],
     ...transcriptLinks(g.all("podcast:transcript")),
+    ...itemPersons(g.all("podcast:person")),
   };
+}
+
+function itemPersons(els: El[]): { persons?: Person[] } {
+  const list = parsePersons(els);
+  return list.length ? { persons: list } : {};
 }
 
 function transcriptLinks(els: El[]): { transcripts?: ParsedEpisode["transcripts"] } {

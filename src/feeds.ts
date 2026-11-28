@@ -69,7 +69,8 @@ export class Feeds {
     let inserted = 0, changed = 0;
     this.db.tx(() => {
       this.db.run(`UPDATE feeds SET title=?, author=COALESCE(?,author), description=COALESCE(?,description), image=COALESCE(?,image), link=COALESCE(?,link),
-        etag=?, last_modified=?, fetched_at=?, error=NULL WHERE id=?`, f.title, f.author, f.description, httpUrl(f.image), httpUrl(f.link), etag, lastModified, now, feedId);
+        etag=?, last_modified=?, fetched_at=?, error=NULL, persons=? WHERE id=?`, f.title, f.author, f.description, httpUrl(f.image), httpUrl(f.link), etag, lastModified, now,
+        f.persons?.length ? JSON.stringify(f.persons) : null, feedId);
       const have = new Map(this.db.all("SELECT guid, hash FROM episodes WHERE feed_id=?", feedId).map((r) => [r.guid, r.hash]));
       const seen = new Set<string>();
       for (const e of f.episodes.slice(0, 10_000)) {
@@ -81,20 +82,21 @@ export class Feeds {
         if (old === undefined) inserted++; else changed++;
         const psc = e.psc.length ? JSON.stringify(e.psc) : null;
         const transcripts = e.transcripts?.length ? JSON.stringify(e.transcripts) : null;
+        const persons = e.persons?.length ? JSON.stringify(e.persons) : null;
         // A changed enclosure or chapter source invalidates cached chapters.
-        this.db.run(`INSERT INTO episodes(feed_id,guid,title,description,audio_url,mime,size,duration_ms,pub_date,image,link,chapters_url,psc,number,season,type,hash,first_seen,transcripts)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        this.db.run(`INSERT INTO episodes(feed_id,guid,title,description,audio_url,mime,size,duration_ms,pub_date,image,link,chapters_url,psc,number,season,type,hash,first_seen,transcripts,persons)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(feed_id,guid) DO UPDATE SET
             transcript=CASE WHEN transcripts IS NOT excluded.transcripts THEN NULL ELSE transcript END,
             transcript_source=CASE WHEN transcripts IS NOT excluded.transcripts THEN NULL ELSE transcript_source END,
-            transcripts=excluded.transcripts,
+            transcripts=excluded.transcripts, persons=excluded.persons,
             chapters=CASE WHEN audio_url IS NOT excluded.audio_url OR chapters_url IS NOT excluded.chapters_url OR psc IS NOT excluded.psc THEN NULL ELSE chapters END,
             chapters_source=CASE WHEN audio_url IS NOT excluded.audio_url OR chapters_url IS NOT excluded.chapters_url OR psc IS NOT excluded.psc THEN NULL ELSE chapters_source END,
             title=excluded.title, description=excluded.description, audio_url=excluded.audio_url, mime=excluded.mime, size=COALESCE(excluded.size,size),
             duration_ms=COALESCE(excluded.duration_ms,duration_ms), pub_date=COALESCE(excluded.pub_date,pub_date), image=excluded.image, link=excluded.link,
             chapters_url=excluded.chapters_url, psc=excluded.psc, number=excluded.number, season=excluded.season, type=excluded.type, hash=excluded.hash`,
           feedId, e.guid, e.title, e.description, e.audioUrl, e.mime, e.size, e.durationMs, e.pubDate, httpUrl(e.image), httpUrl(e.link),
-          httpUrl(e.chaptersUrl), psc, e.number, e.season, e.type, hash, now, transcripts);
+          httpUrl(e.chaptersUrl), psc, e.number, e.season, e.type, hash, now, transcripts, persons);
       }
     });
     return { inserted, changed };

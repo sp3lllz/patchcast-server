@@ -145,7 +145,7 @@ export async function buildApp(o: AppOptions) {
     positionAt: e.position_at ?? 0, lastPlayedAt: e.last_played_at ?? null, completedAt: e.completed_at ?? null,
     hasTranscript: !!e.transcripts && e.transcript_source !== "none",
   });
-  const EP = `SELECT e.id,e.feed_id,e.guid,e.title,e.audio_url,e.mime,e.size,e.duration_ms,e.pub_date,e.image,e.embedded_art,e.link,e.number,e.type,e.transcripts,e.transcript_source,
+  const EP = `SELECT e.id,e.feed_id,e.guid,e.title,e.audio_url,e.mime,e.size,e.duration_ms,e.pub_date,e.image,e.embedded_art,e.link,e.number,e.type,e.transcripts,e.transcript_source,e.persons,f.persons feed_persons,
     f.title podcast, f.image feed_image, f.url feed_url, f.key feed_key, s.played, s.position_ms, s.position_at, s.last_played_at, s.completed_at, s.duration_ms s_duration
     FROM episodes e JOIN feeds f ON f.id=e.feed_id LEFT JOIN episode_state s ON s.user_id=? AND s.feed_key=f.key AND s.guid=e.guid`;
   const num = (v: any, name = "id") => { const n = Number(v); if (!Number.isSafeInteger(n) || n <= 0) throw new AuthError(400, "bad_request", `Invalid ${name}`); return n; };
@@ -164,6 +164,8 @@ export async function buildApp(o: AppOptions) {
     if (!e) throw new AuthError(404, "not_found", "Episode not found");
     return e;
   };
+  /** podcast:person lists with their pictures through the art proxy (0.11). An episode without its own uses the show's. */
+  const personsOut = (json: string | null | undefined) => (json ? (JSON.parse(json) as any[]) : []).map((p) => ({ ...p, img: artUrl(p.img) }));
   const ref = (e: Row) => ({ feedUrl: e.feed_url as string, guid: e.guid as string, enclosureUrl: e.audio_url as string, title: e.title as string, pubDate: e.pub_date as number | null });
 
   // ------------------------------------------------------------ public routes
@@ -330,7 +332,7 @@ export async function buildApp(o: AppOptions) {
         const u = P(req).userId, f = feedOf(u, num((req.params as any).id));
         return {
           id: f.id, feedUrl: f.url, title: f.title ?? f.s_title ?? f.url, author: f.author, description: notes(f.description), image: artUrl(f.image), link: f.link,
-          error: f.error, fetchedAt: f.fetched_at, subscribed: !f.deleted, settings: JSON.parse(f.settings), rating: sync.rating(u, f.key),
+          error: f.error, fetchedAt: f.fetched_at, subscribed: !f.deleted, settings: JSON.parse(f.settings), rating: sync.rating(u, f.key), persons: personsOut(f.persons),
           episodes: db.all(`${EP} WHERE e.feed_id=? ORDER BY e.pub_date DESC, e.id DESC`, u, f.id).map(ep),
         };
       });
@@ -338,7 +340,7 @@ export async function buildApp(o: AppOptions) {
         const u = P(req).userId, e = episodeOf(u, num((req.params as any).id));
         const d = db.get("SELECT description FROM episodes WHERE id=?", e.id)!;
         const st = sync.state(u, e.feed_key, e.guid);
-        return { ...ep(e), notes: notes(d.description), lastDevice: st?.position_device ? { id: st.position_device, name: st.dname } : null };
+        return { ...ep(e), notes: notes(d.description), persons: personsOut(e.persons ?? e.feed_persons), lastDevice: st?.position_device ? { id: st.position_device, name: st.dname } : null };
       });
       a.get("/api/v1/episodes/:id/chapters", async (req) => {
         const e = episodeOf(P(req).userId, num((req.params as any).id));

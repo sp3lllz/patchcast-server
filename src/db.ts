@@ -152,6 +152,11 @@ const MIGRATIONS: string[] = [
   ALTER TABLE episodes ADD COLUMN transcript TEXT;
   ALTER TABLE episodes ADD COLUMN transcript_source TEXT;
   `,
+  // 0.11.0: podcast:person (JSON lists) for the show and for single episodes (guests).
+  `
+  ALTER TABLE feeds ADD COLUMN persons TEXT;
+  ALTER TABLE episodes ADD COLUMN persons TEXT;
+  `,
 ];
 
 function migrate(db: Db) {
