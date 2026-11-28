@@ -4,10 +4,11 @@ import { join } from "node:path";
 import type { Db, Row } from "./db.ts";
 import { decodeXml, parseFeed, parseJsonChapters, httpUrl, normalizeChapters, type Chapter, type ParsedFeed } from "./feed.ts";
 import { parseTag, readTag, sniffImage } from "./id3.ts";
+import { parseTranscript, pickTranscript, transcriptKind, type Transcript } from "./transcript.ts";
 import { FetchError, Semaphore, safeFetch } from "./net.ts";
 import { feedKey, httpFallback } from "./urls.ts";
 
-const FEED_MAX = 40 * 1024 * 1024, ART_MAX = 12 * 1024 * 1024, CHAPTERS_MAX = 4 * 1024 * 1024;
+const FEED_MAX = 40 * 1024 * 1024, ART_MAX = 12 * 1024 * 1024, CHAPTERS_MAX = 4 * 1024 * 1024, TRANSCRIPT_MAX = 8 * 1024 * 1024;
 const ART_CACHE_MAX = 512 * 1024 * 1024;
 
 export interface Log { info(o: any, m?: string): void; warn(o: any, m?: string): void }
@@ -19,6 +20,7 @@ export class Feeds {
   private cacheDir: string;
   private sem = new Semaphore(4);
   private chapterLocks = new Map<number, Promise<Chapter[]>>();
+  private transcriptLocks = new Map<number, Promise<(Transcript & { source: string; language: string | null }) | null>>();
   private artLocks = new Map<string, Promise<{ path: string; mime: string } | null>>();
   private refreshing: Promise<void> | null = null;
   private closed = false;
@@ -78,17 +80,21 @@ export class Feeds {
         if (old === hash) continue;
         if (old === undefined) inserted++; else changed++;
         const psc = e.psc.length ? JSON.stringify(e.psc) : null;
+        const transcripts = e.transcripts?.length ? JSON.stringify(e.transcripts) : null;
         // A changed enclosure or chapter source invalidates cached chapters.
-        this.db.run(`INSERT INTO episodes(feed_id,guid,title,description,audio_url,mime,size,duration_ms,pub_date,image,link,chapters_url,psc,number,season,type,hash,first_seen)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        this.db.run(`INSERT INTO episodes(feed_id,guid,title,description,audio_url,mime,size,duration_ms,pub_date,image,link,chapters_url,psc,number,season,type,hash,first_seen,transcripts)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(feed_id,guid) DO UPDATE SET
+            transcript=CASE WHEN transcripts IS NOT excluded.transcripts THEN NULL ELSE transcript END,
+            transcript_source=CASE WHEN transcripts IS NOT excluded.transcripts THEN NULL ELSE transcript_source END,
+            transcripts=excluded.transcripts,
             chapters=CASE WHEN audio_url IS NOT excluded.audio_url OR chapters_url IS NOT excluded.chapters_url OR psc IS NOT excluded.psc THEN NULL ELSE chapters END,
             chapters_source=CASE WHEN audio_url IS NOT excluded.audio_url OR chapters_url IS NOT excluded.chapters_url OR psc IS NOT excluded.psc THEN NULL ELSE chapters_source END,
             title=excluded.title, description=excluded.description, audio_url=excluded.audio_url, mime=excluded.mime, size=COALESCE(excluded.size,size),
             duration_ms=COALESCE(excluded.duration_ms,duration_ms), pub_date=COALESCE(excluded.pub_date,pub_date), image=excluded.image, link=excluded.link,
             chapters_url=excluded.chapters_url, psc=excluded.psc, number=excluded.number, season=excluded.season, type=excluded.type, hash=excluded.hash`,
           feedId, e.guid, e.title, e.description, e.audioUrl, e.mime, e.size, e.durationMs, e.pubDate, httpUrl(e.image), httpUrl(e.link),
-          httpUrl(e.chaptersUrl), psc, e.number, e.season, e.type, hash, now);
+          httpUrl(e.chaptersUrl), psc, e.number, e.season, e.type, hash, now, transcripts);
       }
     });
     return { inserted, changed };
@@ -154,6 +160,35 @@ export class Feeds {
       this.chapterLocks.set(episodeId, p);
     }
     return p;
+  }
+
+  /** The episode's transcript (podcast:transcript), fetched once and kept; null when it has none or it can't be read. */
+  transcript(episodeId: number): Promise<(Transcript & { source: string; language: string | null }) | null> {
+    let p = this.transcriptLocks.get(episodeId);
+    if (!p) {
+      p = this.sem.run(() => this.loadTranscript(episodeId)).finally(() => this.transcriptLocks.delete(episodeId));
+      this.transcriptLocks.set(episodeId, p);
+    }
+    return p;
+  }
+  private async loadTranscript(id: number): Promise<(Transcript & { source: string; language: string | null }) | null> {
+    const e = this.db.get("SELECT transcripts, transcript, transcript_source FROM episodes WHERE id=?", id);
+    if (!e?.transcripts) return null;
+    if (e.transcript_source) return e.transcript ? JSON.parse(e.transcript) : null;
+    const link = pickTranscript(JSON.parse(e.transcripts));
+    if (!link) { this.db.run("UPDATE episodes SET transcript=NULL, transcript_source='none' WHERE id=?", id); return null; }
+    try {
+      const r = await safeFetch(link.url, { maxBytes: TRANSCRIPT_MAX, timeoutMs: 30_000, allowHosts: this.allow });
+      if (r.status !== 200) throw new FetchError("http", `HTTP ${r.status}`, r.status);
+      const kind = transcriptKind(link.type || r.headers["content-type"], link.url);
+      const t = parseTranscript(decodeXml(r.bytes, r.headers["content-type"]), kind);
+      const out = t.lines.length ? { ...t, source: kind ?? "text", language: link.language } : null;
+      if (!this.closed) this.db.run("UPDATE episodes SET transcript=?, transcript_source=? WHERE id=?", out ? JSON.stringify(out) : null, kind ?? "text", id);
+      return out;
+    } catch (err: any) {
+      this.log.warn({ episode: id, err: err.message }, "transcript failed"); // not cached: tried again next time
+      return null;
+    }
   }
 
   /** Podcasting 2.0 JSON → PSC in the feed → ID3 CHAP via HTTP Range. Also picks up embedded episode art. */

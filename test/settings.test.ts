@@ -134,10 +134,10 @@ test("a 0.9.0 database (user_version 2) upgrades to the settings store and keeps
     old.run("INSERT INTO subscriptions(user_id,feed_key,feed_url,added_at,changed_at,rev,updated_at) VALUES(1,'example.com/feed','https://example.com/feed',1,1,1,1)");
     old.close();
     const raw = new DatabaseSync(path);
-    raw.exec("DROP TABLE ratings; DROP TABLE meta; DROP TABLE user_settings; PRAGMA user_version=2");
+    raw.exec("ALTER TABLE episodes DROP COLUMN transcripts; ALTER TABLE episodes DROP COLUMN transcript; ALTER TABLE episodes DROP COLUMN transcript_source; DROP TABLE ratings; DROP TABLE meta; DROP TABLE user_settings; PRAGMA user_version=2");
     raw.close();
     const db = new Db(path);
-    assert.equal((db.get("PRAGMA user_version") as any).user_version, 5);
+    assert.equal((db.get("PRAGMA user_version") as any).user_version, 6);
     assert.ok(Number((db.get("SELECT value FROM meta WHERE key='auto_finish_since'") as any).value) > 1_700_000_000_000, "rollout time recorded");
     assert.equal(db.all("SELECT * FROM subscriptions").length, 1);
     assert.deepEqual(db.all("SELECT * FROM user_settings"), []);

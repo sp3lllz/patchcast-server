@@ -24,10 +24,12 @@ export async function api<T = any>(method: string, path: string, body?: unknown,
 
 export interface Episode {
   id: number; feedId: number; title: string; podcast: string; audioUrl: string; audioProxy: string; durationMs: number | null; pubDate: number | null; image: string | null; podcastImage: string | null;
-  link: string | null; played: boolean; positionMs: number; positionAt: number; lastPlayedAt: number | null; type: string | null; auto?: boolean; notes?: string; lastDevice?: { id: string; name: string } | null;
+  link: string | null; played: boolean; positionMs: number; positionAt: number; lastPlayedAt: number | null; type: string | null; auto?: boolean; notes?: string; lastDevice?: { id: string; name: string } | null; hasTranscript?: boolean;
 }
 export interface Chapter { startMs: number; title: string; image?: string | null; url?: string | null; hidden?: boolean }
 export interface Podcast {
   id: number; feedUrl: string; title: string; author: string | null; image: string | null; error: string | null; total: number; unplayed: number;
   settings: { speed?: number | null; priority?: number; exclude?: boolean; autoQueue?: boolean | null }; releases: [number, string | null][]; rating?: number; description?: string; episodes?: Episode[]; subscribed?: boolean; link?: string | null;
 }
+export interface TranscriptLine { startMs: number | null; endMs: number | null; speaker: string | null; text: string }
+export interface Transcript { timed: boolean; lines: TranscriptLine[]; source: string; language: string | null }

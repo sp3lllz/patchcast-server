@@ -140,6 +140,7 @@ progress made elsewhere. Back off exponentially on errors; keep changes until a 
 `GET /library`, `/podcasts/:id`, `/episodes/:id`, `/episodes/:id/chapters`, `/new?days=14`, `/queue`, `/latest`, `/search?q=` · `PUT /queue {base:[id],items:[id],auto:[id]}` ·
 `GET /shuffle?exclude=<episodeId>` (0.10+) → `{episode}` a weighted random episode of a subscribed podcast ·
 `GET /history?limit=50` (0.10+) → `{episodes}` most recently played first, queued ones left out ·
+`GET /episodes/:id/transcript` (0.11+) → `{timed, lines:[{startMs,endMs,speaker,text}], source:"vtt"|"srt"|"json"|"html"|"text", language}` from the feed's `podcast:transcript` (best link: VTT, SRT, JSON, HTML, text; fetched once, then cached); `404 no_transcript` when the episode has none or it can't be read. Episodes carry `hasTranscript` ·
 `GET /settings` → `{settings:[{key,value,changedAt,rev,updatedAt,deviceId}]}`, `PUT /settings {values:{key:value}}` (0.10+) ·
 `POST /episodes/played {ids,played}`, `/episodes/:id/progress {positionMs,durationMs,playing,finished,changedAt,clientTime}`, `/subscriptions {url}`, `/refresh {podcastId?}` ·
 `PATCH/DELETE /subscriptions/:id` · `GET /export/opml|history`, `POST /import/opml|history` (the app's formats, see `HISTORY_FORMAT.md`) ·

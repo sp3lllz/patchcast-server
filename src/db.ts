@@ -146,6 +146,12 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX ratings_rev ON ratings(user_id, rev);
   `,
+  // 0.11.0: Podcasting 2.0 transcripts. transcripts = the feed's links (JSON); transcript = the fetched, parsed text (JSON), cached.
+  `
+  ALTER TABLE episodes ADD COLUMN transcripts TEXT;
+  ALTER TABLE episodes ADD COLUMN transcript TEXT;
+  ALTER TABLE episodes ADD COLUMN transcript_source TEXT;
+  `,
 ];
 
 function migrate(db: Db) {

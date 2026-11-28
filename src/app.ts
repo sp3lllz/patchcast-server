@@ -143,8 +143,9 @@ export async function buildApp(o: AppOptions) {
     mime: e.mime, size: e.size, durationMs: e.duration_ms ?? e.s_duration ?? null, pubDate: e.pub_date, image: artUrl(e.image ?? e.embedded_art ?? e.feed_image),
     podcastImage: artUrl(e.feed_image), link: e.link, number: e.number, type: e.type, played: !!e.played, positionMs: e.position_ms ?? 0,
     positionAt: e.position_at ?? 0, lastPlayedAt: e.last_played_at ?? null, completedAt: e.completed_at ?? null,
+    hasTranscript: !!e.transcripts && e.transcript_source !== "none",
   });
-  const EP = `SELECT e.id,e.feed_id,e.guid,e.title,e.audio_url,e.mime,e.size,e.duration_ms,e.pub_date,e.image,e.embedded_art,e.link,e.number,e.type,
+  const EP = `SELECT e.id,e.feed_id,e.guid,e.title,e.audio_url,e.mime,e.size,e.duration_ms,e.pub_date,e.image,e.embedded_art,e.link,e.number,e.type,e.transcripts,e.transcript_source,
     f.title podcast, f.image feed_image, f.url feed_url, f.key feed_key, s.played, s.position_ms, s.position_at, s.last_played_at, s.completed_at, s.duration_ms s_duration
     FROM episodes e JOIN feeds f ON f.id=e.feed_id LEFT JOIN episode_state s ON s.user_id=? AND s.feed_key=f.key AND s.guid=e.guid`;
   const num = (v: any, name = "id") => { const n = Number(v); if (!Number.isSafeInteger(n) || n <= 0) throw new AuthError(400, "bad_request", `Invalid ${name}`); return n; };
@@ -344,6 +345,13 @@ export async function buildApp(o: AppOptions) {
         const list = await feeds.chapters(e.id);
         const fresh = db.get("SELECT image, embedded_art, chapters_source FROM episodes WHERE id=?", e.id)!;
         return { source: fresh.chapters_source ?? "none", chapters: list.map((c) => ({ ...c, image: artUrl(c.image), url: httpUrl(c.url) })), image: artUrl(fresh.image ?? fresh.embedded_art ?? e.feed_image) };
+      });
+      // 0.11.0: Podcasting 2.0 transcript, parsed into lines (timed for VTT/SRT/JSON). 404 when the episode has none.
+      a.get("/api/v1/episodes/:id/transcript", async (req) => {
+        const e = episodeOf(P(req).userId, num((req.params as any).id));
+        const t = e.transcripts ? await feeds.transcript(e.id) : null;
+        if (!t) throw new AuthError(404, "no_transcript", e.transcripts ? "The transcript couldn't be loaded" : "This episode has no transcript");
+        return t;
       });
       a.get("/api/v1/new", async (req) => {
         const u = P(req).userId, days = Math.min(Math.max(Number((req.query as any).days) || 14, 1), 365);

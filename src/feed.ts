@@ -5,6 +5,8 @@ export interface ParsedEpisode {
   guid: string; title: string; description: string | null; audioUrl: string; mime: string | null; size: number | null;
   durationMs: number | null; pubDate: number | null; image: string | null; link: string | null; chaptersUrl: string | null;
   number: number | null; season: number | null; type: string | null; psc: Chapter[];
+  /** podcast:transcript links (0.11); only present when the item has some, so older episodes' change hashes stay the same. */
+  transcripts?: { url: string; type: string; language: string | null; rel: string | null }[];
 }
 export interface ParsedFeed {
   title: string; description: string | null; author: string | null; image: string | null; link: string | null; episodes: ParsedEpisode[];
@@ -157,6 +159,7 @@ function rssItem(item: El): ParsedEpisode | null {
     link: g.text("link"), chaptersUrl: g.attr("podcast:chapters", "url"),
     number: int(g.text("itunes:episode")), season: int(g.text("itunes:season")),
     type: g.text("itunes:episodetype")?.toLowerCase() ?? null,
+    ...transcriptLinks(g.all("podcast:transcript")),
     psc: normalizeChapters(g.all("psc:chapters").flatMap((e) => e.children).filter((e) => e.name === "psc:chapter").flatMap((e) => {
       const start = parseNpt(e.attrs.start);
       return start == null ? [] : [{ startMs: start, title: decodeEntities(e.attrs.title ?? ""), url: httpUrl(e.attrs.href), image: httpUrl(e.attrs.image) }];
@@ -176,7 +179,16 @@ function atomEntry(item: El): ParsedEpisode | null {
     pubDate: parseDate(g.text("published")) ?? parseDate(g.text("updated")), image: g.attr("itunes:image", "href"),
     link: links.find((l) => (l.attrs.rel ?? "alternate") === "alternate")?.attrs.href ?? null, chaptersUrl: g.attr("podcast:chapters", "url"),
     number: null, season: null, type: g.text("itunes:episodetype")?.toLowerCase() ?? null, psc: [],
+    ...transcriptLinks(g.all("podcast:transcript")),
   };
+}
+
+function transcriptLinks(els: El[]): { transcripts?: ParsedEpisode["transcripts"] } {
+  const list = els.flatMap((e) => {
+    const url = httpUrl(e.attrs.url);
+    return url ? [{ url, type: (e.attrs.type ?? "").trim().toLowerCase(), language: e.attrs.language?.trim() || null, rel: e.attrs.rel?.trim() || null }] : [];
+  }).slice(0, 10);
+  return list.length ? { transcripts: list } : {};
 }
 
 export const httpUrl = (s: string | null | undefined) => (s && /^https?:\/\//i.test(s.trim()) ? s.trim() : null);

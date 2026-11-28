@@ -1,6 +1,6 @@
 import { render, type ComponentChildren } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
-import { api, ApiError, BASE, setCsrf, whenUnauthorized, type Chapter, type Episode, type Podcast } from "./api.ts";
+import { api, ApiError, BASE, setCsrf, whenUnauthorized, type Chapter, type Episode, type Podcast, type Transcript } from "./api.ts";
 import { ago, dataVersion, day, dur, fmt, say, Store, toast, useStore } from "./store.ts";
 import * as P from "./player.ts";
 import { prefs, loadPrefs, setPref, type Prefs } from "./settings.ts";
@@ -213,6 +213,45 @@ function ChapterList({ chapters, position, onPick }: { chapters: Chapter[]; posi
     <button key={c.startMs} class={c === cur ? "cur" : ""} onClick={() => onPick(c.startMs)}><Art src={c.image ?? null} cls={c.image ? "" : "hide"} /><span class="grow">{c.title}</span><time>{fmt(c.startMs)}</time></button>))}</div>;
 }
 
+/** 0.11.0: Podcasting 2.0 transcript. Tap a line to play from there; follows the playing position; search within it. */
+function TranscriptView({ ep, position, onSeek }: { ep: Episode; position: number | null; onSeek: (ms: number) => void }) {
+  const { data: t, error } = useData<Transcript>(`/episodes/${ep.id}/transcript`);
+  const [q, setQ] = useState("");
+  const box = useRef<HTMLDivElement>(null);
+  const userScrolled = useRef(0);
+  const cur = t?.timed && position !== null ? t.lines.findLastIndex((l) => (l.startMs ?? 0) <= position + 250) : -1;
+  useEffect(() => { // keep the current line in view inside the box, unless the listener is reading elsewhere
+    const b = box.current, c = b?.querySelector<HTMLElement>(".cur");
+    if (!b || !c || q || Date.now() - userScrolled.current < 8000) return;
+    b.scrollTop = c.offsetTop - b.offsetTop - b.clientHeight / 3;
+  }, [cur, q]);
+  if (error) return <p class="sub">{error}</p>;
+  if (!t) return <p class="sub">Loading transcript…</p>;
+  const needle = q.trim().toLowerCase();
+  const shown = t.lines.map((l, i) => [l, i] as const).filter(([l]) => !needle || l.text.toLowerCase().includes(needle) || (l.speaker ?? "").toLowerCase().includes(needle));
+  const mark = (text: string) => {
+    if (!needle) return text;
+    const out: (string | preact.JSX.Element)[] = []; let at = 0, i: number;
+    while ((i = text.toLowerCase().indexOf(needle, at)) >= 0) { out.push(text.slice(at, i), <mark>{text.slice(i, i + needle.length)}</mark>); at = i + needle.length; }
+    return [...out, text.slice(at)];
+  };
+  return <div class="transcript">
+    <input type="search" class="tsearch" placeholder="Search the transcript" aria-label="Search the transcript" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
+    {needle && <p class="sub" role="status">{shown.length ? `${shown.length} ${shown.length === 1 ? "line" : "lines"}` : "No matches"}</p>}
+    {!t.timed && <p class="sub">This transcript has no times, so it doesn't follow playback.</p>}
+    <div class="lines" ref={box} onWheel={() => (userScrolled.current = Date.now())} onTouchMove={() => (userScrolled.current = Date.now())}>
+      {shown.map(([l, i], k) => {
+        // The speaker shows when it changes (always in search results, where lines are out of context).
+        const who = l.speaker && (needle || k === 0 || shown[k - 1][0].speaker !== l.speaker) ? l.speaker : null;
+        const body = <>{who && <b class="speaker">{who}</b>}<span>{mark(l.text)}</span></>;
+        return t.timed && l.startMs !== null
+          ? <button key={i} class={i === cur ? "cur" : ""} aria-current={i === cur ? "true" : undefined} onClick={() => onSeek(l.startMs!)}><time>{fmt(l.startMs)}</time>{body}</button>
+          : <p key={i}>{body}</p>;
+      })}
+    </div>
+  </div>;
+}
+
 function EpisodePage({ id }: { id: number }) {
   const { data: e, error } = useData<Episode>(`/episodes/${id}`);
   const ch = useData<{ chapters: Chapter[]; source: string; image: string | null }>(`/episodes/${id}/chapters`).data;
@@ -233,10 +272,23 @@ function EpisodePage({ id }: { id: number }) {
           <button class="btn tonal" onClick={() => setPlayed([id], !e.played)}><Icon n="check" /> {e.played ? "Mark unplayed" : "Mark played"}</button>
           {e.link && /^https?:/.test(e.link) && <a class="btn" href={e.link} target="_blank" rel="noopener noreferrer">Website</a>}
         </div></div></div>
-      {ch && ch.chapters.some((c) => !c.hidden) && <section><h2>Chapters ({ch.chapters.filter((c) => !c.hidden).length})</h2><ChapterList chapters={ch.chapters} position={at} onPick={(ms) => P.play(id, ms)} /></section>}
-      <section><h2>Show notes</h2>{e.notes ? <Notes html={e.notes} duration={e.durationMs} onSeek={(ms) => P.play(id, ms)} /> : <p class="sub">No show notes.</p>}</section>
+      <EpisodePanels e={e} chapters={ch?.chapters ?? []} position={at} onSeek={(ms) => P.play(id, ms)} />
     </>
   );
+}
+
+/** Show notes, Chapters and Transcript in one segmented control; a tab only appears when the episode has that (0.11.0). */
+function EpisodePanels({ e, chapters, position, onSeek }: { e: Episode; chapters: Chapter[]; position: number | null; onSeek: (ms: number) => void }) {
+  const n = chapters.filter((c) => !c.hidden).length;
+  const tabs = [["notes", "Show notes"], ...(n ? [["chapters", `Chapters (${n})`]] : []), ...(e.hasTranscript ? [["transcript", "Transcript"]] : [])] as [string, string][];
+  const [tab, setTab] = useState("notes");
+  const shown = tabs.some(([k]) => k === tab) ? tab : "notes";
+  return <section>
+    {tabs.length > 1 && <div class="tabs" role="tablist" aria-label="Episode details">{tabs.map(([k, label]) => <button role="tab" aria-selected={shown === k} class={shown === k ? "on" : ""} onClick={() => setTab(k)}>{label}</button>)}</div>}
+    {shown === "chapters" ? <ChapterList chapters={chapters} position={position} onPick={onSeek} />
+      : shown === "transcript" ? <TranscriptView ep={e} position={position} onSeek={onSeek} />
+      : <>{tabs.length === 1 && <h2>Show notes</h2>}{e.notes ? <Notes html={e.notes} duration={e.durationMs} onSeek={onSeek} /> : <p class="sub">No show notes.</p>}</>}
+  </section>;
 }
 
 /** 0.10.0: what was played before sits above Up Next (oldest at the top); the page opens at Up Next, scroll up for history. */
@@ -455,14 +507,15 @@ function Controls() {
 const Speed = () => { const p = useStore(P.player); return <label class="sel" title="Playback speed"><select aria-label="Playback speed" value={String(p.speed)} onChange={(e) => P.setSpeed(Number(e.currentTarget.value))}>{[...new Set([0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3, p.speed])].sort((a, b) => a - b).map((s) => <option value={String(s)}>{s}×</option>)}</select></label>; };
 
 /** 0.10.0: Show notes and Chapters sit in the same bar as Speed and Sleep; one panel is shown at a time. */
-const panel = new Store<"notes" | "chapters" | null>(null);
+const panel = new Store<"notes" | "chapters" | "transcript" | null>(null);
 function PlayerBar() {
   const p = useStore(P.player), open = useStore(expanded), pick = useStore(panel);
   if (!p.ep) return null;
   const c = P.chapterAt(p.chapters, p.position), art = c?.image ?? p.art;
   const nChapters = p.chapters.filter((x) => !x.hidden).length;
-  const shown = pick === "chapters" && nChapters ? "chapters" : pick === "notes" || !nChapters ? "notes" : "chapters";
-  const show = (x: "notes" | "chapters") => { panel.set(x); requestAnimationFrame(() => document.getElementById("now-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })); };
+  const hasT = !!p.ep.hasTranscript;
+  const shown = pick === "transcript" && hasT ? "transcript" : pick === "chapters" && nChapters ? "chapters" : pick === "notes" || !nChapters ? "notes" : "chapters";
+  const show = (x: "notes" | "chapters" | "transcript") => { panel.set(x); requestAnimationFrame(() => document.getElementById("now-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })); };
   return (
     <>
       {open && <div class="now" role="dialog" aria-label="Now playing"><div class="inner">
@@ -471,8 +524,10 @@ function PlayerBar() {
           <div class="extras toolbar"><Speed /><SleepMenu />
             <button class={`btn ${shown === "notes" ? "on" : ""}`} aria-pressed={shown === "notes"} aria-controls="now-panel" aria-label="Show notes" onClick={() => show("notes")}>Notes</button>
             {nChapters > 0 && <button class={`btn ${shown === "chapters" ? "on" : ""}`} aria-pressed={shown === "chapters"} aria-controls="now-panel" aria-label={`Chapters, ${nChapters}`} onClick={() => show("chapters")}>Chapters {nChapters}</button>}
+            {hasT && <button class={`btn ${shown === "transcript" ? "on" : ""}`} aria-pressed={shown === "transcript"} aria-controls="now-panel" onClick={() => show("transcript")}>Transcript</button>}
             </div><div class="extras"><Volume /></div>{p.via === "proxy" && <div class="sub">Streaming through your server</div>}<Err m={p.error} /></div>
-          <div class="right" id="now-panel">{shown === "chapters" ? <><h3>Chapters ({nChapters})</h3><ChapterList chapters={p.chapters} position={p.position} onPick={P.seek} /></>
+          <div class="right" id="now-panel">{shown === "transcript" ? <><h3>Transcript</h3><TranscriptView ep={p.ep} position={p.position} onSeek={P.seek} /></>
+            : shown === "chapters" ? <><h3>Chapters ({nChapters})</h3><ChapterList chapters={p.chapters} position={p.position} onPick={P.seek} /></>
             : <><h3>Show notes</h3><Notes html={p.ep.notes ?? ""} duration={p.duration} onSeek={P.seek} /></>}</div></div></div></div>}
       <div class="player"><div class="info" onClick={() => expanded.set(!open)} role="button" tabIndex={0} aria-label="Open player" onKeyDown={(e) => e.key === "Enter" && expanded.set(!open)}><Art src={art} /><div class="grow"><b>{p.ep.title}</b><span class="sub">{p.error ?? (c && !c.hidden ? c.title : p.ep.podcast)}</span></div></div>
         <div class="mid"><Controls /><Seek /></div><div class="extras"><Speed /><SleepMenu /><Volume /></div></div>
