@@ -28,6 +28,18 @@ It ends at `patchcast://sync-callback?code=…&state=…` or `?error=access_deni
 Then `POST /auth/oidc/exchange {code, code_verifier}` → `{token, deviceId, user, version}`. The code lives 2 minutes and works once; a wrong verifier destroys it.
 Ignore links whose `state` isn't yours.
 
+### Device pairing (after 0.10.1, for TVs and other devices without a sign-in browser)
+Like the OAuth device authorization grant (RFC 8628). No sign-in browser is needed on the device.
+1. Device: `POST /auth/pair/start {deviceName}` (no auth) → `{pairCode, userCode:"BCDF-GHJK", verifyUrl, verifyUrlComplete, expiresIn:600, interval:5}`.
+   Show `userCode` and `verifyUrl` big, and a QR code of `verifyUrlComplete` (it has the code filled in). Keep `pairCode` secret. 30 starts per address per 15 min.
+2. Person: opens `verifyUrl` (the web player's `/pair` page), signs in, checks the device name and allows or declines. Clients can do the same with their own credentials:
+   `GET /pair/:userCode` → `{userCode, deviceName, createdAt, expiresAt}` (`404 not_found` = wrong, expired or already decided; codes are case- and dash-insensitive;
+   30 wrong codes per account per 15 min → `429`), then `POST /pair/:userCode/approve` → `{ok, deviceName}` or `POST /pair/:userCode/deny`.
+3. Device: `POST /auth/pair/poll {pairCode}` every `interval` seconds → `{status:"pending"}`, then once `{status:"approved", token, deviceId, user, version}`
+   (same as the app sign-in exchange; use the token as `Authorization: Bearer`). Errors: `429 slow_down` (polled too fast; wait `Retry-After`),
+   `403 denied` (declined), `400 expired` (unknown, expired or already used: start again).
+Codes live 10 minutes and only in the server's memory: after a server restart the device starts again. The device appears in `GET /devices` as an app token.
+
 429 responses carry `Retry-After`. Non-GET requests from another origin are refused.
 
 ## Identity

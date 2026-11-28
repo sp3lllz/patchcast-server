@@ -63,3 +63,4 @@ form.inline { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; } form.inlin
 .rating { display:flex; gap:8px; margin:8px 0; } .rating .btn { padding:4px 12px; min-height:32px; font-size:.85rem; } .rating .btn.on { background:var(--tonal); color:var(--ontonal); border-color:transparent; }
 /* 0.10.0: delete my account */
 .danger-zone { border:1px solid var(--err); border-radius:16px; padding:12px 16px; margin-top:12px; } .danger-zone h3 { color:var(--err); margin:0 0 6px; } .danger-zone input { margin-left:8px; padding:5px 8px; }
+.code { font:700 1.15rem ui-monospace, monospace; letter-spacing:.12em; } form.inline input[aria-label="Code shown on your TV"] { font:600 1.2rem ui-monospace, monospace; letter-spacing:.12em; text-transform:uppercase; max-width:14ch; }

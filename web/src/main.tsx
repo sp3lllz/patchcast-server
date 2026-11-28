@@ -415,7 +415,7 @@ function Settings() {
         <button class="btn" onClick={() => download("/export/opml", "patchcast-subscriptions.opml")}>Export OPML</button>
         <FileBtn label="Import play history" accept=".json,application/json" onText={async (x) => { const r = await api("POST", "/import/history", JSON.parse(x)); setRes(`Applied ${r.applied} of ${r.episodes} episode states, ${r.subscribed} new podcasts`); }} />
         <button class="btn" onClick={() => download("/export/history", "patchcast-history.json")}>Export play history</button></div>{res && <p>{res}</p>}</section>
-      <section class="panel"><h2>Devices & tokens</h2><p class="sub">Phones sign in from Patchcast → Settings → Sync. Revoking a device signs it out at once.</p>
+      <section class="panel"><h2>Devices & tokens</h2><p class="sub">Phones sign in from Patchcast → Settings → Sync. An Apple TV shows a code: enter it under Pair a device. Revoking a device signs it out at once.</p><div class="actions"><A to="/pair" class="btn tonal">Pair a device…</A></div>
         {dev.data?.devices.map((d) => <div class="line" key={d.id}><div class="grow"><b>{d.name}</b>{d.current && <i class="chip">This browser</i>}<div class="sub">{d.kind === "app" ? "App token" : "Web session"} · last seen {ago(d.lastSeen)} · added {day(d.createdAt)}</div></div>
           <button class="btn" onClick={() => { const n = prompt("Device name", d.name); if (n) void attempt(() => api("PATCH", `/devices/${d.id}`, { name: n })); }}>Rename</button>
           {!d.current && <button class="btn danger" onClick={() => confirm(`Revoke ${d.name}?`) && attempt(() => api("DELETE", `/devices/${d.id}`), "Revoked")}>Revoke</button>}</div>)}</section>
@@ -423,6 +423,44 @@ function Settings() {
       {m.user.isAdmin && <Users me={m.user.id} users={users.data} error={users.error} />}
       <section class="panel"><h2>Keyboard</h2><p class="sub">Space/K play · J or ← back {pr.skipBackSec} s · L or → forward {pr.skipForwardSec} s · ↑↓ volume · N/P next/previous chapter · &lt; &gt; speed · M mute</p></section>
       <div class="actions"><button class="btn" onClick={() => signOut(false)}>Sign out</button>{acc.data?.sessionVia === "oidc" && <button class="btn" onClick={() => signOut(true)}>Sign out of {acc.data.oidc.providerName} too</button>}<span class="sub">{m.user.username} · Patchcast Sync {m.version}</span></div>
+    </>
+  );
+}
+
+/** Apple TV and other devices without a sign-in browser show a code (and a QR code for this page); approving here signs them in. */
+function Pair() {
+  const m = useStore(me)!;
+  const [code, setCode] = useState(() => new URLSearchParams(location.search).get("code") ?? "");
+  const [found, setFound] = useState<{ userCode: string; deviceName: string; expiresAt: number } | null>(null);
+  const [done, setDone] = useState<"approved" | "denied" | null>(null);
+  const [busy, setBusy] = useState(false), [err, setErr] = useState<string | null>(null);
+  const clean = code.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const look = async (c = clean) => {
+    if (c.length !== 8) return;
+    setBusy(true); setErr(null);
+    try { setFound(await api("GET", `/pair/${c}`)); } catch (e: any) { setFound(null); setErr(e.message); } finally { setBusy(false); }
+  };
+  useEffect(() => { if (clean.length === 8) void look(); }, []); // arrived from the QR code
+  const decide = async (ok: boolean) => {
+    setBusy(true); setErr(null);
+    try { await api("POST", `/pair/${found!.userCode.replace("-", "")}/${ok ? "approve" : "deny"}`, {}); setDone(ok ? "approved" : "denied"); changed(); }
+    catch (e: any) { setErr(e.message); setFound(null); } finally { setBusy(false); }
+  };
+  const again = () => { setDone(null); setFound(null); setCode(""); setErr(null); history.replaceState(null, "", `${BASE}/pair`); };
+  return (
+    <>
+      <h1>Pair a device</h1>
+      {done === "approved" ? <section class="panel" role="status"><h2>Paired</h2><p>{found?.deviceName} is now signed in as <b>{m.user.username}</b>. It can take a few seconds to notice.</p>
+        <p class="sub">You can rename or revoke it any time in <A to="/settings">Settings → Devices</A>.</p><div class="actions"><button class="btn" onClick={again}>Pair another device</button></div></section>
+      : done === "denied" ? <section class="panel" role="status"><h2>Declined</h2><p>{found?.deviceName} was not signed in.</p><div class="actions"><button class="btn" onClick={again}>Enter another code</button></div></section>
+      : found ? <section class="panel"><h2>Sign in {found.deviceName}?</h2>
+        <p>Code <b class="code">{found.userCode}</b>. Allow this device to use your Patchcast account <b>{m.user.username}</b>: it will see and change your podcasts, Up Next, history and settings.</p>
+        <p class="sub">Only allow it if this exact code is on your own screen right now. Never approve a code someone sent you.</p><Err m={err} />
+        <div class="actions"><button class="btn primary" disabled={busy} onClick={() => decide(true)}>Allow</button><button class="btn" disabled={busy} onClick={() => decide(false)}>Don't allow</button></div></section>
+      : <section class="panel"><p>Open Patchcast on your Apple TV and choose <b>Sign in</b>. Type the code it shows, or scan its QR code with your phone.</p>
+        <form class="inline" onSubmit={(e) => { e.preventDefault(); void look(); }}>
+          <input aria-label="Code shown on your TV" placeholder="ABCD-EFGH" autoComplete="off" autoCapitalize="characters" spellcheck={false} maxLength={12} value={code} onInput={(e) => setCode(e.currentTarget.value)} />
+          <button class="btn primary" disabled={busy || clean.length !== 8}>{busy ? "…" : "Continue"}</button></form><Err m={err} /></section>}
     </>
   );
 }
@@ -510,7 +548,7 @@ function App() {
   if (m === null) return <SignIn />;
   const nav = [["/", "home", "Home"], ["/library", "grid", "Library"], ["/queue", "queue", "Up Next"], ["/add", "add", "Add"], ["/settings", "gear", "Settings"]];
   const id = Number(p.split("/")[2]);
-  const page = p.startsWith("/podcast/") ? <PodcastPage id={id} key={p} /> : p.startsWith("/episode/") ? <EpisodePage id={id} key={p} /> : p === "/library" ? <Library /> : p === "/queue" ? <Queue /> : p === "/add" ? <Add /> : p === "/settings" ? <Settings /> : <Home />;
+  const page = p.startsWith("/podcast/") ? <PodcastPage id={id} key={p} /> : p.startsWith("/episode/") ? <EpisodePage id={id} key={p} /> : p === "/library" ? <Library /> : p === "/queue" ? <Queue /> : p === "/add" ? <Add /> : p === "/settings" ? <Settings /> : p === "/pair" ? <Pair /> : <Home />;
   return <div class={`shell ${pl.ep ? "has-player" : ""}`}><nav><A to="/" class="brand"><img src={`${BASE}/icon.svg`} alt="" /><b>Patchcast</b></A>{nav.map(([to, n, l]) => <A to={to} class={`item ${p === to ? "on" : ""}`} key={to}><Icon n={n} /><span>{l}</span></A>)}</nav>
     <main><Banner />{page}</main><PlayerBar />{msg && <div class="toast" role="status">{msg}</div>}</div>;
 }

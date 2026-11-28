@@ -14,6 +14,7 @@ import { feedKey, normalizeFeedUrl } from "./urls.ts";
 import { Accounts } from "./accounts.ts";
 import { OidcClient } from "./oidc.ts";
 import { oidcRoutes } from "./oidc-routes.ts";
+import { Pairings, formatUserCode } from "./pairing.ts";
 import { parseOpml, writeOpml } from "./opml.ts";
 
 const COOKIE = "patchcast_session";
@@ -31,6 +32,7 @@ export async function buildApp(o: AppOptions) {
   const audioSlots = new Map<number, number>();
   const base = config.basePath;
   const accounts = new Accounts(db, config);
+  const pairings = new Pairings((t) => auth.hashToken("pair:" + t), o.now);
   const oidc = new OidcClient(config.oidc, `${config.publicUrl}${base}/auth/oidc/callback`, config.ssrfAllowHosts);
 
   const app: FastifyInstance = Fastify({
@@ -186,6 +188,29 @@ export async function buildApp(o: AppOptions) {
     };
     oidcRoutes(r, { config, auth, accounts, client: oidc, limiter, secure, sameOrigin, deviceName, startSession, deviceCreated: (u) => events.send(u, "devices", {}), now: o.now });
 
+    // ---- device pairing (Apple TV and other devices without a sign-in browser). See pairing.ts and docs/SYNC_API.md.
+    r.post("/api/v1/auth/pair/start", async (req, reply) => {
+      sameOrigin(req);
+      const wait = limiter.takeIp("pair-start", req.ip, 30);
+      if (wait) throw Object.assign(new AuthError(429, "rate_limited", `Too many pairing attempts. Try again in ${Math.ceil(wait / 60)} min.`), { wait });
+      const s = pairings.start(deviceName((req.body as any)?.deviceName, "TV"));
+      const verifyUrl = `${config.publicUrl}${base}/pair`;
+      reply.header("cache-control", "no-store");
+      return { ...s, verifyUrl, verifyUrlComplete: `${verifyUrl}?code=${s.userCode.replace("-", "")}` };
+    });
+    r.post("/api/v1/auth/pair/poll", async (req, reply) => {
+      sameOrigin(req);
+      reply.header("cache-control", "no-store");
+      const res = pairings.poll((req.body as any)?.pairCode);
+      if (res.status === "pending") return res;
+      const user = auth.user(res.userId);
+      if (!user) throw new AuthError(400, "expired", "This pairing code has expired. Start again for a new code.");
+      const dev = auth.createDevice(user.id, res.deviceName);
+      events.send(user.id, "devices", {});
+      req.log.info({ userId: user.id }, "device paired");
+      return { status: "approved", token: dev.token, deviceId: dev.deviceId, user: { id: user.id, username: user.username, isAdmin: !!user.is_admin }, version: config.version };
+    });
+
     // ---------------------------------------------------------- everything below needs a signed-in user
     await r.register(async (a) => {
       a.addHook("onRequest", authenticate);
@@ -226,6 +251,29 @@ export async function buildApp(o: AppOptions) {
         return { deleted: true };
       });
       a.get("/api/v1/me/account", { preHandler: cookieOnly }, async (req) => accounts.describe(P(req)));
+
+      // ---- approving a pairing (web player, or an app with its device token)
+      const pending = (req: FastifyRequest) => {
+        const p = P(req), wait = limiter.takeIp("pair-lookup", `user${p.userId}`, 30);
+        if (wait) throw Object.assign(new AuthError(429, "rate_limited", `Too many codes tried. Try again in ${Math.ceil(wait / 60)} min.`), { wait });
+        const x = pairings.lookup((req.params as any).code);
+        if (!x) throw new AuthError(404, "not_found", "That code isn't valid or has expired. Check the code on your TV; it changes every 10 minutes.");
+        limiter.successIp("pair-lookup", `user${p.userId}`);
+        return x;
+      };
+      a.get("/api/v1/pair/:code", async (req) => {
+        const x = pending(req);
+        return { userCode: formatUserCode(x.userCode), deviceName: x.deviceName, createdAt: x.created, expiresAt: x.expires };
+      });
+      a.post("/api/v1/pair/:code/approve", async (req) => {
+        const x = pending(req);
+        pairings.decide(x, P(req).userId);
+        return { ok: true, deviceName: x.deviceName };
+      });
+      a.post("/api/v1/pair/:code/deny", async (req) => {
+        pairings.decide(pending(req), null);
+        return { ok: true };
+      });
 
       // ---- devices
       a.get("/api/v1/devices", async (req) => ({
