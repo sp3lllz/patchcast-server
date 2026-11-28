@@ -142,6 +142,7 @@ progress made elsewhere. Back off exponentially on errors; keep changes until a 
 `GET /history?limit=50` (0.10+) → `{episodes}` most recently played first, queued ones left out ·
 `GET /episodes/:id/transcript` (0.11+) → `{timed, lines:[{startMs,endMs,speaker,text}], source:"vtt"|"srt"|"json"|"html"|"text", language}` from the feed's `podcast:transcript` (best link: VTT, SRT, JSON, HTML, text; fetched once, then cached); `404 no_transcript` when the episode has none or it can't be read. Episodes carry `hasTranscript` ·
 `podcast:person` (0.11+): `GET /podcasts/:id` and `GET /episodes/:id` carry `persons:[{name,role,group,img,href}]` (role/group lower case, default `host`/`cast`; `img` through the art proxy; an episode without its own people gets the show's) ·
+`podcast:funding` (0.11+): `GET /podcasts/:id` carries `funding:[{url,text}]` (http(s) only, text defaults to "Support the show", at most 5) ·
 `GET /settings` → `{settings:[{key,value,changedAt,rev,updatedAt,deviceId}]}`, `PUT /settings {values:{key:value}}` (0.10+) ·
 `POST /episodes/played {ids,played}`, `/episodes/:id/progress {positionMs,durationMs,playing,finished,changedAt,clientTime}`, `/subscriptions {url}`, `/refresh {podcastId?}` ·
 `PATCH/DELETE /subscriptions/:id` · `GET /export/opml|history`, `POST /import/opml|history` (the app's formats, see `HISTORY_FORMAT.md`) ·

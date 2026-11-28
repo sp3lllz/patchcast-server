@@ -29,7 +29,7 @@ export interface Episode {
 export interface Chapter { startMs: number; title: string; image?: string | null; url?: string | null; hidden?: boolean }
 export interface Podcast {
   id: number; feedUrl: string; title: string; author: string | null; image: string | null; error: string | null; total: number; unplayed: number;
-  settings: { speed?: number | null; priority?: number; exclude?: boolean; autoQueue?: boolean | null }; releases: [number, string | null][]; rating?: number; description?: string; episodes?: Episode[]; subscribed?: boolean; link?: string | null; persons?: Person[];
+  settings: { speed?: number | null; priority?: number; exclude?: boolean; autoQueue?: boolean | null }; releases: [number, string | null][]; rating?: number; description?: string; episodes?: Episode[]; subscribed?: boolean; link?: string | null; persons?: Person[]; funding?: { url: string; text: string }[];
 }
 export interface Person { name: string; role: string; group: string; img: string | null; href: string | null }
 export interface TranscriptLine { startMs: number | null; endMs: number | null; speaker: string | null; text: string }

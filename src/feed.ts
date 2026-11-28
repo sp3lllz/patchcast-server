@@ -14,6 +14,23 @@ export interface ParsedFeed {
   title: string; description: string | null; author: string | null; image: string | null; link: string | null; episodes: ParsedEpisode[];
   /** podcast:person at feed level (0.11): the show's regular people; apply to every episode that has none of its own. */
   persons: Person[];
+  /** podcast:funding (0.11): "Support the show" links. */
+  funding: Funding[];
+}
+/** podcast:funding (0.11). Same rules in the apps (Funding.swift / Funding.kt). */
+export interface Funding { url: string; text: string }
+
+/** http(s) URL required; label = the feed's text (trimmed, at most 60 characters) or "Support the show"; at most 5, no duplicate URLs. */
+export function parseFunding(els: { attrs: Record<string, string>; text: string }[]): Funding[] {
+  const out: Funding[] = [];
+  for (const e of els) {
+    const url = httpUrl(e.attrs.url);
+    if (!url || out.some((f) => f.url === url)) continue;
+    const t = decodeEntities(e.text).replace(/\s+/g, " ").trim();
+    out.push({ url, text: t ? (t.length > 60 ? t.slice(0, 59).trimEnd() + "…" : t) : "Support the show" });
+    if (out.length >= 5) break;
+  }
+  return out;
 }
 /** podcast:person (0.11). Same rules in the apps (Persons.swift / Persons.kt). */
 export interface Person { name: string; role: string; group: string; img: string | null; href: string | null }
@@ -136,6 +153,7 @@ export function parseFeed(xml: string): ParsedFeed {
       image: attr("itunes:image", "href") ?? txt("logo") ?? txt("icon"),
       link: c.find((e) => e.name === "link" && (e.attrs.rel ?? "alternate") === "alternate")?.attrs.href ?? null, episodes,
       persons: parsePersons(c.filter((e) => e.name === "podcast:person")),
+      funding: parseFunding(c.filter((e) => e.name === "podcast:funding")),
     };
   }
   const rssImg = c.find((e) => e.name === "image")?.children.find((e) => e.name === "url")?.text.trim() ?? null;
@@ -145,6 +163,7 @@ export function parseFeed(xml: string): ParsedFeed {
     image: (attr("itunes:image", "href") ?? rssImg ?? attr("media:thumbnail", "url"))?.trim() ?? null,
     link: c.find((e) => e.name === "link" && e.text.trim())?.text.trim() ?? null, episodes,
     persons: parsePersons(c.filter((e) => e.name === "podcast:person")),
+    funding: parseFunding(c.filter((e) => e.name === "podcast:funding")),
   };
 }
 

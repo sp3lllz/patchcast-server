@@ -333,6 +333,7 @@ export async function buildApp(o: AppOptions) {
         return {
           id: f.id, feedUrl: f.url, title: f.title ?? f.s_title ?? f.url, author: f.author, description: notes(f.description), image: artUrl(f.image), link: f.link,
           error: f.error, fetchedAt: f.fetched_at, subscribed: !f.deleted, settings: JSON.parse(f.settings), rating: sync.rating(u, f.key), persons: personsOut(f.persons),
+          funding: f.funding ? JSON.parse(f.funding) : [],
           episodes: db.all(`${EP} WHERE e.feed_id=? ORDER BY e.pub_date DESC, e.id DESC`, u, f.id).map(ep),
         };
       });

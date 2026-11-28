@@ -157,6 +157,7 @@ function PodcastPage({ id }: { id: number }) {
           {p.subscribed ? <button class="btn" onClick={() => confirm(`Unsubscribe from ${p.title}? It will be removed from your other devices too.`) && attempt(async () => { await api("DELETE", `/subscriptions/${id}`); go("/library"); }, "Unsubscribed")}>Unsubscribe</button>
             : <button class="btn primary" onClick={() => attempt(() => api("POST", "/subscriptions", { url: p.feedUrl }), "Subscribed")}>Subscribe</button>}
           <button class="btn" onClick={() => attempt(async () => { const r = await api("POST", "/refresh", { podcastId: id }); if (r.error) throw new Error(r.error); }, "Refreshed")}><Icon n="refresh" /> Refresh</button>
+          {p.funding?.[0] && <a class="btn tonal" href={p.funding[0].url} target="_blank" rel="noopener noreferrer" title={`${p.funding[0].text} (opens the podcast's page)`}>♥ {p.funding[0].text}</a>}
           <label class="check"><input type="checkbox" checked={!!p.settings.exclude} onChange={(e) => attempt(() => api("PATCH", `/subscriptions/${id}`, { exclude: e.currentTarget.checked }))} /> Exclude from New episodes</label>
           <label class="check">Speed <select value={String(p.settings.speed ?? 1)} onChange={(e) => attempt(() => api("PATCH", `/subscriptions/${id}`, { speed: Number(e.currentTarget.value) }))}>{[...new Set([0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3, p.settings.speed ?? 1])].sort().map((s) => <option value={String(s)}>{s}×</option>)}</select></label>
         </div></div></div>

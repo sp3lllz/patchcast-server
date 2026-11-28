@@ -157,6 +157,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE feeds ADD COLUMN persons TEXT;
   ALTER TABLE episodes ADD COLUMN persons TEXT;
   `,
+  // 0.11.0: podcast:funding links of the show (JSON).
+  `
+  ALTER TABLE feeds ADD COLUMN funding TEXT;
+  `,
 ];
 
 function migrate(db: Db) {
