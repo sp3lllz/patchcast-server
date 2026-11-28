@@ -9,6 +9,36 @@ export interface ParsedEpisode {
   transcripts?: { url: string; type: string; language: string | null; rel: string | null }[];
   /** podcast:person on the item (0.11); only present when it has some. */
   persons?: Person[];
+  /** podcast:alternateEnclosure (0.11); only present when it has some. */
+  alternates?: Alternate[];
+}
+/** podcast:alternateEnclosure (0.11). Same rules in the apps (Alternates.swift / Alternates.kt). */
+export interface Alternate { type: string; url: string; bitrate: number | null; height: number | null; length: number | null; title: string | null; isDefault: boolean }
+
+/**
+ * type required (lower case); url = the first http(s) podcast:source; bitrate/height/length positive integers or null; title trimmed
+ * (≤ 60) or null; at most 10.
+ */
+export function parseAlternates(els: El[]): Alternate[] {
+  const out: Alternate[] = [];
+  const pos = (s: string | undefined) => { const n = Number(s); return Number.isFinite(n) && n > 0 ? Math.round(n) : null; };
+  for (const e of els) {
+    const type = (e.attrs.type ?? "").trim().toLowerCase();
+    const url = e.children.filter((c) => c.name === "podcast:source").map((c) => httpUrl(c.attrs.uri)).find(Boolean) ?? null;
+    if (!type || !url) continue;
+    const title = decodeEntities(e.attrs.title ?? "").replace(/\s+/g, " ").trim().slice(0, 60) || null;
+    out.push({ type, url, bitrate: pos(e.attrs.bitrate), height: pos(e.attrs.height), length: pos(e.attrs.length), title, isDefault: e.attrs.default === "true" });
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+/** The video to offer: the first video alternate, preferring the tallest up to 1080 lines (then the smallest above). */
+export function pickVideo(alts: Alternate[]): Alternate | null {
+  const v = alts.filter((a) => a.type.startsWith("video/"));
+  if (!v.length) return null;
+  const ok = v.filter((a) => (a.height ?? 0) <= 1080).sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
+  return ok[0] ?? [...v].sort((a, b) => (a.height ?? 0) - (b.height ?? 0))[0];
 }
 export interface ParsedFeed {
   title: string; description: string | null; author: string | null; image: string | null; link: string | null; episodes: ParsedEpisode[];
@@ -213,6 +243,7 @@ function rssItem(item: El): ParsedEpisode | null {
     type: g.text("itunes:episodetype")?.toLowerCase() ?? null,
     ...transcriptLinks(g.all("podcast:transcript")),
     ...itemPersons(g.all("podcast:person")),
+    ...itemAlternates(g.all("podcast:alternateenclosure")),
     psc: normalizeChapters(g.all("psc:chapters").flatMap((e) => e.children).filter((e) => e.name === "psc:chapter").flatMap((e) => {
       const start = parseNpt(e.attrs.start);
       return start == null ? [] : [{ startMs: start, title: decodeEntities(e.attrs.title ?? ""), url: httpUrl(e.attrs.href), image: httpUrl(e.attrs.image) }];
@@ -234,7 +265,13 @@ function atomEntry(item: El): ParsedEpisode | null {
     number: null, season: null, type: g.text("itunes:episodetype")?.toLowerCase() ?? null, psc: [],
     ...transcriptLinks(g.all("podcast:transcript")),
     ...itemPersons(g.all("podcast:person")),
+    ...itemAlternates(g.all("podcast:alternateenclosure")),
   };
+}
+
+function itemAlternates(els: El[]): { alternates?: Alternate[] } {
+  const list = parseAlternates(els);
+  return list.length ? { alternates: list } : {};
 }
 
 function itemPersons(els: El[]): { persons?: Person[] } {

@@ -166,6 +166,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE feeds ADD COLUMN guid TEXT;
   CREATE INDEX feeds_guid ON feeds(guid);
   `,
+  // 0.11.0: podcast:alternateEnclosure (JSON): other audio qualities and video versions of an episode.
+  `
+  ALTER TABLE episodes ADD COLUMN alternates TEXT;
+  `,
 ];
 
 function migrate(db: Db) {

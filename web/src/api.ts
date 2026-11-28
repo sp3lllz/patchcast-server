@@ -24,7 +24,7 @@ export async function api<T = any>(method: string, path: string, body?: unknown,
 
 export interface Episode {
   id: number; feedId: number; title: string; podcast: string; audioUrl: string; audioProxy: string; durationMs: number | null; pubDate: number | null; image: string | null; podcastImage: string | null;
-  link: string | null; played: boolean; positionMs: number; positionAt: number; lastPlayedAt: number | null; type: string | null; auto?: boolean; notes?: string; lastDevice?: { id: string; name: string } | null; hasTranscript?: boolean; persons?: Person[];
+  link: string | null; played: boolean; positionMs: number; positionAt: number; lastPlayedAt: number | null; type: string | null; auto?: boolean; notes?: string; lastDevice?: { id: string; name: string } | null; hasTranscript?: boolean; persons?: Person[]; video?: { url: string; type: string; height: number | null; title: string | null } | null;
 }
 export interface Chapter { startMs: number; title: string; image?: string | null; url?: string | null; hidden?: boolean }
 export interface Podcast {

@@ -278,6 +278,7 @@ function EpisodePage({ id }: { id: number }) {
         <A to={`/podcast/${e.feedId}`} class="sub">{e.podcast}</A><h1>{e.title}</h1>
         <div class="sub">{day(e.pubDate)}{e.durationMs ? ` · ${dur(e.durationMs)}` : ""}{e.positionMs > 0 && !e.played ? ` · at ${fmt(at ?? e.positionMs)}` : ""}{e.played ? " · Played" : ""}{e.lastDevice && !current && e.positionMs > 0 ? ` · last on ${e.lastDevice.name}` : ""}</div>
         <People list={e.persons} label="People in this episode" />
+        {e.video && <a class="textlink" href={e.video.url} target="_blank" rel="noopener noreferrer">Watch the video{e.video.height ? ` (${e.video.height}p)` : ""}</a>}
         <div class="actions">
           <button class="btn primary" onClick={() => (current ? P.toggle() : P.play(id))}><Icon n={playing ? "pause" : "play"} /> {playing ? "Pause" : e.positionMs > 0 && !e.played ? `Resume ${fmt(at ?? e.positionMs)}` : "Play"}</button>
           <button class="btn tonal" onClick={() => P.addToQueue(id, true)}>Play next</button>
