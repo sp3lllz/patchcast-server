@@ -161,6 +161,11 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE feeds ADD COLUMN funding TEXT;
   `,
+  // 0.11.0: podcast:guid, the show's identity across feed URL changes.
+  `
+  ALTER TABLE feeds ADD COLUMN guid TEXT;
+  CREATE INDEX feeds_guid ON feeds(guid);
+  `,
 ];
 
 function migrate(db: Db) {

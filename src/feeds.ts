@@ -69,8 +69,8 @@ export class Feeds {
     let inserted = 0, changed = 0;
     this.db.tx(() => {
       this.db.run(`UPDATE feeds SET title=?, author=COALESCE(?,author), description=COALESCE(?,description), image=COALESCE(?,image), link=COALESCE(?,link),
-        etag=?, last_modified=?, fetched_at=?, error=NULL, persons=?, funding=? WHERE id=?`, f.title, f.author, f.description, httpUrl(f.image), httpUrl(f.link), etag, lastModified, now,
-        f.persons?.length ? JSON.stringify(f.persons) : null, f.funding?.length ? JSON.stringify(f.funding) : null, feedId);
+        etag=?, last_modified=?, fetched_at=?, error=NULL, persons=?, funding=?, guid=COALESCE(?,guid) WHERE id=?`, f.title, f.author, f.description, httpUrl(f.image), httpUrl(f.link), etag, lastModified, now,
+        f.persons?.length ? JSON.stringify(f.persons) : null, f.funding?.length ? JSON.stringify(f.funding) : null, f.guid ?? null, feedId);
       const have = new Map(this.db.all("SELECT guid, hash FROM episodes WHERE feed_id=?", feedId).map((r) => [r.guid, r.hash]));
       const seen = new Set<string>();
       for (const e of f.episodes.slice(0, 10_000)) {

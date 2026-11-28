@@ -215,8 +215,16 @@ export class SyncStore {
     return true;
   }
 
+  /**
+   * The user's rating of a podcast. 0.11: when there is none under this feed's address but the feed has a podcast:guid, the
+   * newest rating of a feed with the same guid counts (the podcast moved to a new feed URL).
+   */
   rating(userId: number, key: string): number {
-    return (this.db.get("SELECT rating FROM ratings WHERE user_id=? AND feed_key=?", userId, key) as Row | undefined)?.rating ?? 0;
+    const r = this.db.get("SELECT rating FROM ratings WHERE user_id=? AND feed_key=?", userId, key) as Row | undefined;
+    if (r) return r.rating;
+    const moved = this.db.get(`SELECT r.rating FROM feeds f JOIN feeds o ON o.guid=f.guid AND o.key<>f.key JOIN ratings r ON r.user_id=? AND r.feed_key=o.key
+      WHERE f.key=? AND f.guid IS NOT NULL ORDER BY r.changed_at DESC LIMIT 1`, userId, key) as Row | undefined;
+    return moved?.rating ?? 0;
   }
 
   /** Every stored setting of a user (resets included, as null). */

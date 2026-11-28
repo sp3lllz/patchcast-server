@@ -14,12 +14,12 @@ test("a 0.10 database (user_version 5) gains the transcript columns and keeps it
   try {
     Db.open(dir).close();
     const raw = new DatabaseSync(join(dir, "patchcast.db"));
-    raw.exec(`ALTER TABLE feeds DROP COLUMN funding; ALTER TABLE feeds DROP COLUMN persons; ALTER TABLE episodes DROP COLUMN persons; ALTER TABLE episodes DROP COLUMN transcripts; ALTER TABLE episodes DROP COLUMN transcript; ALTER TABLE episodes DROP COLUMN transcript_source; PRAGMA user_version=5;
+    raw.exec(`DROP INDEX feeds_guid; ALTER TABLE feeds DROP COLUMN guid; ALTER TABLE feeds DROP COLUMN funding; ALTER TABLE feeds DROP COLUMN persons; ALTER TABLE episodes DROP COLUMN persons; ALTER TABLE episodes DROP COLUMN transcripts; ALTER TABLE episodes DROP COLUMN transcript; ALTER TABLE episodes DROP COLUMN transcript_source; PRAGMA user_version=5;
       INSERT INTO feeds(id,key,url,title) VALUES(1,'example.com/f','https://example.com/f','F');
       INSERT INTO episodes(feed_id,guid,title,audio_url,first_seen,chapters,chapters_source) VALUES(1,'g','Old','https://example.com/a.mp3',1,'[]','none');`);
     raw.close();
     const db = Db.open(dir);
-    assert.equal((db.get("PRAGMA user_version") as any).user_version, 8);
+    assert.equal((db.get("PRAGMA user_version") as any).user_version, 9);
     const e = db.get("SELECT title, chapters_source, transcripts, transcript FROM episodes WHERE guid='g'")!;
     assert.deepEqual({ ...e }, { title: "Old", chapters_source: "none", transcripts: null, transcript: null });
     db.close();

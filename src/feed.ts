@@ -16,6 +16,13 @@ export interface ParsedFeed {
   persons: Person[];
   /** podcast:funding (0.11): "Support the show" links. */
   funding: Funding[];
+  /** podcast:guid (0.11): the show's identity that survives a change of feed URL. */
+  guid: string | null;
+}
+/** podcast:guid: trimmed, lower case, 1–100 characters of letters, digits, "-", "_", ".", ":". Anything else is ignored. */
+export function feedGuid(s: string | null | undefined): string | null {
+  const t = (s ?? "").trim().toLowerCase();
+  return /^[a-z0-9._:-]{1,100}$/.test(t) ? t : null;
 }
 /** podcast:funding (0.11). Same rules in the apps (Funding.swift / Funding.kt). */
 export interface Funding { url: string; text: string }
@@ -154,6 +161,7 @@ export function parseFeed(xml: string): ParsedFeed {
       link: c.find((e) => e.name === "link" && (e.attrs.rel ?? "alternate") === "alternate")?.attrs.href ?? null, episodes,
       persons: parsePersons(c.filter((e) => e.name === "podcast:person")),
       funding: parseFunding(c.filter((e) => e.name === "podcast:funding")),
+      guid: feedGuid(txt("podcast:guid")),
     };
   }
   const rssImg = c.find((e) => e.name === "image")?.children.find((e) => e.name === "url")?.text.trim() ?? null;
@@ -164,6 +172,7 @@ export function parseFeed(xml: string): ParsedFeed {
     link: c.find((e) => e.name === "link" && e.text.trim())?.text.trim() ?? null, episodes,
     persons: parsePersons(c.filter((e) => e.name === "podcast:person")),
     funding: parseFunding(c.filter((e) => e.name === "podcast:funding")),
+    guid: feedGuid(txt("podcast:guid")),
   };
 }
 
