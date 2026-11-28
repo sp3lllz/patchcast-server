@@ -170,6 +170,12 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE episodes ADD COLUMN alternates TEXT;
   `,
+  // 0.11.0: podcast:season/episode label per episode; podcast:medium and podcast:locked per feed.
+  `
+  ALTER TABLE episodes ADD COLUMN numbering TEXT;
+  ALTER TABLE feeds ADD COLUMN medium TEXT;
+  ALTER TABLE feeds ADD COLUMN locked INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 function migrate(db: Db) {

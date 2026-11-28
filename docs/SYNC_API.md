@@ -145,6 +145,7 @@ progress made elsewhere. Back off exponentially on errors; keep changes until a 
 `podcast:funding` (0.11+): `GET /podcasts/:id` carries `funding:[{url,text}]` (http(s) only, text defaults to "Support the show", at most 5) ·
 `podcast:guid` (0.11+): `GET /podcasts/:id` carries `guid` (lower case, or null). A podcast with no rating of its own shows the newest rating of a feed with the same guid (it moved to a new address); sync records stay keyed by feed URL ·
 `podcast:alternateEnclosure` (0.11+): `GET /episodes/:id` carries `alternates:[{type,url,bitrate,height,length,title,isDefault}]` (first http(s) source each, at most 10) and `video` (the version to offer: tallest up to 1080 lines, or null) ·
+`podcast:season`/`podcast:episode` (0.11+): episodes carry `numbering` ("Season 2 · Episode 5", using the tags' `name`/`display`; null without those tags); `GET /podcasts/:id` carries `medium` (lower case or null) and `locked` (boolean) ·
 `GET /settings` → `{settings:[{key,value,changedAt,rev,updatedAt,deviceId}]}`, `PUT /settings {values:{key:value}}` (0.10+) ·
 `POST /episodes/played {ids,played}`, `/episodes/:id/progress {positionMs,durationMs,playing,finished,changedAt,clientTime}`, `/subscriptions {url}`, `/refresh {podcastId?}` ·
 `PATCH/DELETE /subscriptions/:id` · `GET /export/opml|history`, `POST /import/opml|history` (the app's formats, see `HISTORY_FORMAT.md`) ·

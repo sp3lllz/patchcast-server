@@ -143,9 +143,9 @@ export async function buildApp(o: AppOptions) {
     mime: e.mime, size: e.size, durationMs: e.duration_ms ?? e.s_duration ?? null, pubDate: e.pub_date, image: artUrl(e.image ?? e.embedded_art ?? e.feed_image),
     podcastImage: artUrl(e.feed_image), link: e.link, number: e.number, type: e.type, played: !!e.played, positionMs: e.position_ms ?? 0,
     positionAt: e.position_at ?? 0, lastPlayedAt: e.last_played_at ?? null, completedAt: e.completed_at ?? null,
-    hasTranscript: !!e.transcripts && e.transcript_source !== "none",
+    hasTranscript: !!e.transcripts && e.transcript_source !== "none", numbering: e.numbering ?? null,
   });
-  const EP = `SELECT e.id,e.feed_id,e.guid,e.title,e.audio_url,e.mime,e.size,e.duration_ms,e.pub_date,e.image,e.embedded_art,e.link,e.number,e.type,e.transcripts,e.transcript_source,e.persons,f.persons feed_persons,e.alternates,
+  const EP = `SELECT e.id,e.feed_id,e.guid,e.title,e.audio_url,e.mime,e.size,e.duration_ms,e.pub_date,e.image,e.embedded_art,e.link,e.number,e.type,e.transcripts,e.transcript_source,e.persons,f.persons feed_persons,e.alternates,e.numbering,
     f.title podcast, f.image feed_image, f.url feed_url, f.key feed_key, s.played, s.position_ms, s.position_at, s.last_played_at, s.completed_at, s.duration_ms s_duration
     FROM episodes e JOIN feeds f ON f.id=e.feed_id LEFT JOIN episode_state s ON s.user_id=? AND s.feed_key=f.key AND s.guid=e.guid`;
   const num = (v: any, name = "id") => { const n = Number(v); if (!Number.isSafeInteger(n) || n <= 0) throw new AuthError(400, "bad_request", `Invalid ${name}`); return n; };
@@ -333,7 +333,7 @@ export async function buildApp(o: AppOptions) {
         return {
           id: f.id, feedUrl: f.url, title: f.title ?? f.s_title ?? f.url, author: f.author, description: notes(f.description), image: artUrl(f.image), link: f.link,
           error: f.error, fetchedAt: f.fetched_at, subscribed: !f.deleted, settings: JSON.parse(f.settings), rating: sync.rating(u, f.key), persons: personsOut(f.persons),
-          funding: f.funding ? JSON.parse(f.funding) : [], guid: f.guid ?? null,
+          funding: f.funding ? JSON.parse(f.funding) : [], guid: f.guid ?? null, medium: f.medium ?? null, locked: !!f.locked,
           episodes: db.all(`${EP} WHERE e.feed_id=? ORDER BY e.pub_date DESC, e.id DESC`, u, f.id).map(ep),
         };
       });

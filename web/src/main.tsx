@@ -129,6 +129,9 @@ function Rating({ id, value }: { id: number; value: number }) {
   </div>;
 }
 
+/** podcast:medium (0.11): media other than a plain podcast get a label. Same list as the server and apps. */
+const MEDIUM: Record<string, string> = { music: "Music", video: "Video", film: "Film", audiobook: "Audiobook", newsletter: "Newsletter", blog: "Blog", course: "Course" };
+
 function PodcastPage({ id }: { id: number }) {
   const { data: p, error } = useData<Podcast>(`/podcasts/${id}`);
   const [filter, setFilter] = useState("unplayed");
@@ -149,7 +152,7 @@ function PodcastPage({ id }: { id: number }) {
   return (
     <>
       <div class="hero"><Art src={p.image} /><div class="grow">
-        <h1>{p.title}</h1>{p.author && <div class="sub">{p.author}</div>}
+        <h1>{p.title}</h1>{p.author && <div class="sub">{p.author}{p.medium && MEDIUM[p.medium] && <i class="chip">{MEDIUM[p.medium]}</i>}</div>}
         <People list={p.persons} label="People on this podcast" />
         <Rating id={id} value={p.rating ?? 0} />
         <div class={`pred ${h.late ? "late" : ""}`}><b>{h.head}</b><span>{h.detail}</span></div>
@@ -275,7 +278,7 @@ function EpisodePage({ id }: { id: number }) {
   return (
     <>
       <div class="hero"><Art src={cur?.image ?? ch?.image ?? e.image} /><div class="grow">
-        <A to={`/podcast/${e.feedId}`} class="sub">{e.podcast}</A><h1>{e.title}</h1>
+        <A to={`/podcast/${e.feedId}`} class="sub">{e.podcast}</A>{e.numbering && <div class="sub numbering">{e.numbering}</div>}<h1>{e.title}</h1>
         <div class="sub">{day(e.pubDate)}{e.durationMs ? ` · ${dur(e.durationMs)}` : ""}{e.positionMs > 0 && !e.played ? ` · at ${fmt(at ?? e.positionMs)}` : ""}{e.played ? " · Played" : ""}{e.lastDevice && !current && e.positionMs > 0 ? ` · last on ${e.lastDevice.name}` : ""}</div>
         <People list={e.persons} label="People in this episode" />
         {e.video && <a class="textlink" href={e.video.url} target="_blank" rel="noopener noreferrer">Watch the video{e.video.height ? ` (${e.video.height}p)` : ""}</a>}

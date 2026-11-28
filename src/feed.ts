@@ -11,6 +11,8 @@ export interface ParsedEpisode {
   persons?: Person[];
   /** podcast:alternateEnclosure (0.11); only present when it has some. */
   alternates?: Alternate[];
+  /** podcast:season / podcast:episode label (0.11); only present when the item has those tags. */
+  numbering?: string;
 }
 /** podcast:alternateEnclosure (0.11). Same rules in the apps (Alternates.swift / Alternates.kt). */
 export interface Alternate { type: string; url: string; bitrate: number | null; height: number | null; length: number | null; title: string | null; isDefault: boolean }
@@ -48,7 +50,20 @@ export interface ParsedFeed {
   funding: Funding[];
   /** podcast:guid (0.11): the show's identity that survives a change of feed URL. */
   guid: string | null;
+  /** podcast:medium (0.11), lower case, or null. */
+  medium: string | null;
+  /** podcast:locked (0.11): the owner asked other platforms not to import the feed. Shown to nobody; kept for completeness. */
+  locked: boolean;
 }
+
+/** podcast:season / podcast:episode → "Season 2: The Return · Episode 5" style label (0.11). Same rule in the apps. */
+export function numberingLabel(season: { n: number | null; name: string | null } | null, episode: { n: number | null; display: string | null } | null): string | null {
+  const s = season ? season.name || (season.n != null ? `Season ${season.n}` : null) : null;
+  const e = episode ? episode.display || (episode.n != null ? `Episode ${episode.n}` : null) : null;
+  return [s, e].filter(Boolean).join(" · ") || null;
+}
+/** Media other than a plain podcast get a label on the podcast page. */
+export const MEDIUM_LABELS: Record<string, string> = { music: "Music", video: "Video", film: "Film", audiobook: "Audiobook", newsletter: "Newsletter", blog: "Blog", course: "Course" };
 /** podcast:guid: trimmed, lower case, 1–100 characters of letters, digits, "-", "_", ".", ":". Anything else is ignored. */
 export function feedGuid(s: string | null | undefined): string | null {
   const t = (s ?? "").trim().toLowerCase();
@@ -191,7 +206,7 @@ export function parseFeed(xml: string): ParsedFeed {
       link: c.find((e) => e.name === "link" && (e.attrs.rel ?? "alternate") === "alternate")?.attrs.href ?? null, episodes,
       persons: parsePersons(c.filter((e) => e.name === "podcast:person")),
       funding: parseFunding(c.filter((e) => e.name === "podcast:funding")),
-      guid: feedGuid(txt("podcast:guid")),
+      guid: feedGuid(txt("podcast:guid")), ...mediumLocked(txt),
     };
   }
   const rssImg = c.find((e) => e.name === "image")?.children.find((e) => e.name === "url")?.text.trim() ?? null;
@@ -202,7 +217,7 @@ export function parseFeed(xml: string): ParsedFeed {
     link: c.find((e) => e.name === "link" && e.text.trim())?.text.trim() ?? null, episodes,
     persons: parsePersons(c.filter((e) => e.name === "podcast:person")),
     funding: parseFunding(c.filter((e) => e.name === "podcast:funding")),
-    guid: feedGuid(txt("podcast:guid")),
+    guid: feedGuid(txt("podcast:guid")), ...mediumLocked(txt),
   };
 }
 
@@ -244,6 +259,7 @@ function rssItem(item: El): ParsedEpisode | null {
     ...transcriptLinks(g.all("podcast:transcript")),
     ...itemPersons(g.all("podcast:person")),
     ...itemAlternates(g.all("podcast:alternateenclosure")),
+    ...itemNumbering(g.all("podcast:season")[0], g.all("podcast:episode")[0]),
     psc: normalizeChapters(g.all("psc:chapters").flatMap((e) => e.children).filter((e) => e.name === "psc:chapter").flatMap((e) => {
       const start = parseNpt(e.attrs.start);
       return start == null ? [] : [{ startMs: start, title: decodeEntities(e.attrs.title ?? ""), url: httpUrl(e.attrs.href), image: httpUrl(e.attrs.image) }];
@@ -267,6 +283,19 @@ function atomEntry(item: El): ParsedEpisode | null {
     ...itemPersons(g.all("podcast:person")),
     ...itemAlternates(g.all("podcast:alternateenclosure")),
   };
+}
+
+function mediumLocked(txt: (n: string) => string | null) {
+  const m = (txt("podcast:medium") ?? "").trim().toLowerCase();
+  return { medium: /^[a-z]{2,20}$/.test(m) ? m : null, locked: (txt("podcast:locked") ?? "").trim().toLowerCase() === "yes" };
+}
+
+function itemNumbering(season: El | undefined, episode: El | undefined): { numbering?: string } {
+  const num = (s: string) => { const t = s.trim(); return /^\d{1,6}(\.\d+)?$/.test(t) ? Number(t) : null; };
+  const clean = (s: string | undefined) => (s ? decodeEntities(s).replace(/\s+/g, " ").trim().slice(0, 60) : "") || null;
+  const label = numberingLabel(season ? { n: num(season.text), name: clean(season.attrs.name) } : null,
+    episode ? { n: num(episode.text), display: clean(episode.attrs.display) } : null);
+  return label ? { numbering: label } : {};
 }
 
 function itemAlternates(els: El[]): { alternates?: Alternate[] } {
